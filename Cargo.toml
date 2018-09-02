@@ -4,6 +4,6 @@ version = "0.1.0"
 authors = ["KenjiTakahashi <wozniakk@gmail.com>"]
 
 [dependencies]
-permutation = "0.2.5"
-serde_json = "1.0.26"
+byteorder = "1.2.6"
+serde_json = { version = "1.0.26", features = ["preserve_order"] }
 string-interner = "0.7.0"
