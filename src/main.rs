@@ -13,6 +13,7 @@ use std::fs::File;
 use std::io::{BufRead,BufReader,BufWriter,Write};
 // use std::mem::size_of;
 use std::thread;
+use std::time::Instant;
 
 #[derive(Debug)]
 enum ValVec {
@@ -43,6 +44,8 @@ impl ValVec {
 }
 
 fn main() {
+    let mut instant = Instant::now();
+
     let args: Vec<String> = env::args().collect();
     let file = File::open(&args[1]).unwrap();
 
@@ -50,9 +53,15 @@ fn main() {
     let mut data: HashMap<String, ValVec> = HashMap::new();
     let mut rows = 0; // TODO: Quite possibly we could get rid of this
 
+    println!("init `{:?}`", instant.elapsed());
+    instant = Instant::now();
+
     for line in BufReader::new(file).lines() {
         rows += 1;
+        let mut ins2 = Instant::now();
         let v: Map<String, Value> = serde_json::from_str(&line.unwrap()).unwrap();
+        println!("sjson `{:?}`", ins2.elapsed());
+        ins2 = Instant::now();
         for (key, value) in v {
             match value {
                 Value::Number(n) => {
@@ -77,8 +86,12 @@ fn main() {
                 _ => (),
             }
         }
+        println!("sinit `{:?}`", ins2.elapsed());
     }
     data.insert("count".to_string(), ValVec::Integer(vec![1; rows]));
+
+    println!("json `{:?}`", instant.elapsed());
+    instant = Instant::now();
 
     // FIXME: Deal with this i64 vs. usize thing
     let mut perm: Vec<i64> = Vec::new();
@@ -106,6 +119,9 @@ fn main() {
         perm[curr_pos] = -1 - perm[curr_pos];
     }
 
+    println!("sort `{:?}`", instant.elapsed());
+    instant = Instant::now();
+
     let meta_long = json!({
         "valueType": "LONG",
         "hasMultipleValues": false,
@@ -127,8 +143,8 @@ fn main() {
         "hasMultipleValues": false,
         "parts": [{
             "type": "stringDictionary",
-            "byteOrder": "LITTLE_ENDIAN",
             "bitmapSerdeFactory": {"type": "concise"},
+            "byteOrder": "LITTLE_ENDIAN",
         }],
     });
 
@@ -138,20 +154,61 @@ fn main() {
     meta_types.insert("string", meta_string.to_string());
 
     let keys = vec![
-        "timestamp", "count", "vendor", "technology", "version",
-        "ne_type", "object_id", "value_num",
+        "timestamp",
+        "count",
+        "vendor", "technology", "version", "ne_type", "object_id", "counter_id",
+        "granularity", "end_timestamp", "export_timestamp", "processed_timestamp",
+        "value_num",
     ];
 
     let fop = File::create("00000.smoosh").unwrap();
     let mut fo = BufWriter::new(fop);
+    // XXX: We should be able to merge cols and dims with sth clever
+    let mut cols_index_header = vec![];
+    let mut cols_index_header_size = 0;
+    let mut cols_index = vec![];
+    let mut dims_index_header = vec![];
+    let mut dims_index_header_size = 0;
+    let mut dims_index = vec![];
 
     for key in keys {
-        let data = &data[key];
+        let datum = data.get_mut(key).unwrap();
 
-        match data {
+        if key != "timestamp" {
+            cols_index_header_size += 4 + key.len() as u32;
+            cols_index_header.write_u32::<BigEndian>(cols_index_header_size).unwrap();
+            cols_index.write_u32::<BigEndian>(0).unwrap();
+            cols_index.write(key.as_bytes()).unwrap();
+
+            if key != "count" {
+                dims_index_header_size += 4 + key.len() as u32;
+                dims_index_header.write_u32::<BigEndian>(dims_index_header_size).unwrap();
+                dims_index.write_u32::<BigEndian>(0).unwrap();
+                dims_index.write(key.as_bytes()).unwrap();
+            }
+        }
+
+        match datum {
             ValVec::InternedString(is) => {
                 fo.write_u32::<BigEndian>(meta_types["string"].len() as u32).unwrap();
                 fo.write(meta_types["string"].as_bytes()).unwrap();
+
+                fo.write_u16::<BigEndian>(1).unwrap();
+                fo.write_u8(1).unwrap();
+
+                fo.write_u32::<BigEndian>(14).unwrap(); // FIXME: This is not constant
+                is.sort();
+                is.dedup();
+
+                fo.write_u32::<BigEndian>(is.len() as u32).unwrap();
+                let mut offset = 0;
+                for v in is {
+                    let vv = si.resolve(*v).unwrap();
+                    offset += vv.len() as u32 + 4;
+                    fo.write_u32::<BigEndian>(offset).unwrap();
+                    fo.write_u32::<BigEndian>(0).unwrap(); // Some kind of padding...?
+                    fo.write(vv.as_bytes()).unwrap();
+                }
             },
             ValVec::Integer(i) => {
                 fo.write_u32::<BigEndian>(meta_types["long"].len() as u32).unwrap();
@@ -193,6 +250,53 @@ fn main() {
             },
         }
     }
+
+    // write cols_bitmap size? (for current test is should be 481)
+    fo.write_u8(1).unwrap(); // GenericIndexed.VERSION_ONE
+    fo.write_u8(0).unwrap(); // GenericIndexed.REVERSE_LOOKUP_DISALLOWED
+    fo.write_u32::<BigEndian>(222).unwrap(); // byteBuffer.cap (FIXME: NOT CONST)
+    fo.write_u32::<BigEndian>(data.len() as u32 - 1).unwrap(); // GenericIndexed.size (number of columns, without timestamp)
+    fo.write(&cols_index_header).unwrap();
+    fo.write(&cols_index).unwrap();
+    fo.write_u8(1).unwrap(); // GenericIndexed.VERSION_ONE
+    fo.write_u8(0).unwrap(); // GenericIndexed.REVERSE_LOOKUP_DISALLOWED
+    fo.write_u32::<BigEndian>(209).unwrap(); // byteBuffer.cap (FIXME: NOT CONST)
+    fo.write_u32::<BigEndian>(data.len() as u32 - 2).unwrap(); // GenericIndexed.size (number of dims, without timestamp and count)
+    fo.write(&dims_index_header).unwrap();
+    fo.write(&dims_index).unwrap();
+
+    if let ValVec::Integer(ts) = &data["timestamp"] {
+        fo.write_i64::<BigEndian>(ts[0]).unwrap();
+        fo.write_i64::<BigEndian>(ts[ts.len() - 1] + 86400000).unwrap(); // XXX: DAY granularity
+    }
+
+    let bitmap_type = json!({
+        "type": "concise",
+    });
+    let generic_meta = json!({
+        "container": {},
+        "aggregators": [{
+            "type": "longSum",
+            "name": "count",
+            "fieldName": "count",
+            "expression": Value::Null,
+        }],
+        "timestampSpec": {
+            "column": "timestamp",
+            "format": "millis",
+            "missingValue": Value::Null,
+        },
+        "queryGranularity": {
+            "type": "none",
+        },
+        "rollup": true,
+    });
+
+    fo.write_u32::<BigEndian>(18).unwrap();
+    fo.write(bitmap_type.to_string().as_bytes()).unwrap();
+    fo.write(generic_meta.to_string().as_bytes()).unwrap();
+
+    println!("dump `{:?}`", instant.elapsed());
 
 
     if args.len() > 2 {
