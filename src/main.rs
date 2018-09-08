@@ -43,6 +43,28 @@ impl ValVec {
     }
 }
 
+fn write_numeric_header(fo: &mut BufWriter<File>, meta: &str, length: u32) {
+    fo.write_u32::<BigEndian>(meta.len() as u32).unwrap();
+    fo.write(meta.as_bytes()).unwrap();
+
+    fo.write_u8(2).unwrap(); // VERSION
+
+    fo.write_u32::<BigEndian>(length).unwrap(); // totalSize
+
+    fo.write_u32::<BigEndian>(8192).unwrap(); // sizePer
+    fo.write_u8(0xff).unwrap(); // compression
+    fo.write_u8(1).unwrap(); // VERSION
+    fo.write_u8(0).unwrap(); // REVERSE_LOOKUP_DISALLOWED
+    let values_size = length * 8 + 4; // [aka. headerOut] + Integer.BYTES
+    fo.write_u32::<BigEndian>(values_size + 8).unwrap(); // + headerOut size
+    fo.write_u32::<BigEndian>(1).unwrap(); // numWritten (seems it's always 1, unless
+                                           // working with multiple "chunks", merged
+                                           // together [which mode does not seem to be
+                                           // used in practice])
+    fo.write_u32::<BigEndian>(values_size).unwrap();
+    fo.write_u32::<BigEndian>(0).unwrap(); // "nullness marker"
+}
+
 fn main() {
     let mut instant = Instant::now();
 
@@ -211,38 +233,14 @@ fn main() {
                 }
             },
             ValVec::Integer(i) => {
-                fo.write_u32::<BigEndian>(meta_types["long"].len() as u32).unwrap();
-                fo.write(meta_types["long"].as_bytes()).unwrap();
-
-                fo.write_u8(2).unwrap();
-
-                fo.write_u32::<BigEndian>(i.len() as u32).unwrap();
-
-                fo.write(&[0, 0, 0x20, 0, 0xff, 1, 0]).unwrap();
-                let magic1 = 12 + i.len() as u32 * 8;
-                fo.write_u32::<BigEndian>(magic1).unwrap();
-                fo.write_u32::<BigEndian>(1).unwrap();
-                fo.write_u32::<BigEndian>(magic1 - 8).unwrap();
-                fo.write_u32::<BigEndian>(0).unwrap();
+                write_numeric_header(&mut fo, &meta_types["long"], i.len() as u32);
 
                 for v in i {
                     fo.write_i64::<LittleEndian>(*v).unwrap();
                 }
             },
             ValVec::Float(f) => {
-                fo.write_u32::<BigEndian>(meta_types["double"].len() as u32).unwrap();
-                fo.write(meta_types["double"].as_bytes()).unwrap();
-
-                fo.write_u8(2).unwrap();
-
-                fo.write_u32::<BigEndian>(f.len() as u32).unwrap();
-
-                fo.write(&[0, 0, 0x20, 0, 0xff, 1, 0]).unwrap();
-                let magic1 = 12 + f.len() as u32 * 8;
-                fo.write_u32::<BigEndian>(magic1).unwrap();
-                fo.write_u32::<BigEndian>(1).unwrap();
-                fo.write_u32::<BigEndian>(magic1 - 8).unwrap();
-                fo.write_u32::<BigEndian>(0).unwrap();
+                write_numeric_header(&mut fo, &meta_types["double"], f.len() as u32);
 
                 for v in f {
                     fo.write_f64::<LittleEndian>(*v).unwrap();
@@ -251,7 +249,6 @@ fn main() {
         }
     }
 
-    // write cols_bitmap size? (for current test is should be 481)
     fo.write_u8(1).unwrap(); // GenericIndexed.VERSION_ONE
     fo.write_u8(0).unwrap(); // GenericIndexed.REVERSE_LOOKUP_DISALLOWED
     fo.write_u32::<BigEndian>(222).unwrap(); // byteBuffer.cap (FIXME: NOT CONST)
