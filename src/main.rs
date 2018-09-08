@@ -51,17 +51,12 @@ fn main() {
 
     let mut si = StringInterner::default();
     let mut data: HashMap<String, ValVec> = HashMap::new();
-    let mut rows = 0; // TODO: Quite possibly we could get rid of this
 
     println!("init `{:?}`", instant.elapsed());
     instant = Instant::now();
 
     for line in BufReader::new(file).lines() {
-        rows += 1;
-        let mut ins2 = Instant::now();
         let v: Map<String, Value> = serde_json::from_str(&line.unwrap()).unwrap();
-        println!("sjson `{:?}`", ins2.elapsed());
-        ins2 = Instant::now();
         for (key, value) in v {
             match value {
                 Value::Number(n) => {
@@ -86,8 +81,13 @@ fn main() {
                 _ => (),
             }
         }
-        println!("sinit `{:?}`", ins2.elapsed());
     }
+
+    let mut rows = 0;
+    if let ValVec::Integer(ts) = &data["timestamp"] {
+        rows = ts.len();
+    }
+
     data.insert("count".to_string(), ValVec::Integer(vec![1; rows]));
 
     println!("json `{:?}`", instant.elapsed());
