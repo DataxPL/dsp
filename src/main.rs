@@ -1,11 +1,13 @@
 extern crate byteorder;
+extern crate indexmap;
 #[macro_use]
 extern crate serde_json;
 extern crate string_interner;
 
 use byteorder::{BigEndian,LittleEndian,WriteBytesExt};
+use indexmap::IndexMap;
 use serde_json::{Map,Value};
-use string_interner::{StringInterner,Sym};
+use string_interner::StringInterner;
 
 use std::collections::HashMap;
 use std::env;
@@ -15,33 +17,8 @@ use std::io::{BufRead,BufReader,BufWriter,Write};
 use std::thread;
 use std::time::Instant;
 
-#[derive(Debug)]
-enum ValVec {
-    InternedString(Vec<Sym>),
-    Integer(Vec<i64>),
-    Float(Vec<f64>),
-}
-
-impl ValVec {
-    fn push_is(&mut self, value: Sym) {
-        match self {
-            ValVec::InternedString(i) => i.push(value),
-            _ => (),
-        }
-    }
-    fn push_i(&mut self, value: i64) {
-        match self {
-            ValVec::Integer(i) => i.push(value),
-            _ => (),
-        }
-    }
-    fn push_f(&mut self, value: f64) {
-        match self {
-            ValVec::Float(i) => i.push(value),
-            _ => (),
-        }
-    }
-}
+extern crate ds;
+use ds::ValVec;
 
 fn write_numeric_header(fo: &mut BufWriter<File>, meta: &str, length: u32) {
     fo.write_u32::<BigEndian>(meta.len() as u32).unwrap();
@@ -215,22 +192,58 @@ fn main() {
                 fo.write_u32::<BigEndian>(meta_types["string"].len() as u32).unwrap();
                 fo.write(meta_types["string"].as_bytes()).unwrap();
 
-                fo.write_u16::<BigEndian>(1).unwrap();
-                fo.write_u8(1).unwrap();
+                fo.write_u8(0).unwrap(); // VERSION (UNCOMPRESSED_SINGLE_VALUE)
+                fo.write_u8(1).unwrap(); // VERSION_ONE
+                fo.write_u8(1).unwrap(); // REVERSE_LOOKUP_ALLOWED
 
-                fo.write_u32::<BigEndian>(14).unwrap(); // FIXME: This is not constant
-                is.sort();
-                is.dedup();
+                // XXX: Maybe it's better idea to store str lengths at data
+                // creation time and avoid these buffers?
+                let mut header = vec![];
+                let mut items = vec![];
+                let mut values = vec![];
 
-                fo.write_u32::<BigEndian>(is.len() as u32).unwrap();
-                let mut offset = 0;
-                for v in is {
-                    let vv = si.resolve(*v).unwrap();
-                    offset += vv.len() as u32 + 4;
-                    fo.write_u32::<BigEndian>(offset).unwrap();
-                    fo.write_u32::<BigEndian>(0).unwrap(); // Some kind of padding...?
-                    fo.write(vv.as_bytes()).unwrap();
+                let mut map = IndexMap::new();
+
+                for (i, v) in is.iter().enumerate() {
+                    let vs = si.resolve(*v).unwrap();
+                    map.entry(vs).or_insert(Vec::new()).push(i);
                 }
+
+                map.sort_keys();
+
+                values.write_u8(0).unwrap(); // VERSION
+                values.write_u8(1).unwrap(); // numBytes
+                values.write_u32::<BigEndian>(is.len() as u32 + 3).unwrap(); // + padding
+                let vl = values.len(); // This has to be separate, to please borrow checker
+                values.resize(vl + is.len(), 0);
+
+                let mut offset = 0;
+                for (i, (k, v)) in map.iter().enumerate() {
+                    offset += k.len() as u32 + 4; // + "nullness marker"
+                    header.write_u32::<BigEndian>(offset).unwrap();
+                    items.write_u32::<BigEndian>(0).unwrap(); // "nullness marker"
+                    items.write(k.as_bytes()).unwrap();
+                    for vv in v {
+                        values[6 + vv] = i as u8;
+                    }
+                }
+
+                values.write(&[0, 0, 0]).unwrap(); // padding
+
+                fo.write_u32::<BigEndian>(
+                    header.len() as u32 + items.len() as u32 + 4
+                ).unwrap(); // + Integer.BYTES
+                fo.write_u32::<BigEndian>(map.len() as u32).unwrap(); // numWritten
+                fo.write(&header).unwrap();
+                fo.write(&items).unwrap();
+                fo.write(&values).unwrap();
+
+                fo.write_u8(1).unwrap(); // VERSION
+                fo.write_u8(0).unwrap(); // REVERSE_LOOKUP_DISALLOWED
+                let maplen = map.len() as u32;
+                // Another header + values + 4 sizing
+                fo.write_u32::<BigEndian>(maplen * 4 + maplen * 8 + 4).unwrap();
+                fo.write_u32::<BigEndian>(map.len() as u32).unwrap();
             },
             ValVec::Integer(i) => {
                 write_numeric_header(&mut fo, &meta_types["long"], i.len() as u32);
@@ -251,20 +264,24 @@ fn main() {
 
     fo.write_u8(1).unwrap(); // GenericIndexed.VERSION_ONE
     fo.write_u8(0).unwrap(); // GenericIndexed.REVERSE_LOOKUP_DISALLOWED
-    fo.write_u32::<BigEndian>(222).unwrap(); // byteBuffer.cap (FIXME: NOT CONST)
+    fo.write_u32::<BigEndian>(
+        (cols_index_header.len() + cols_index.len() + 4) as u32
+    ).unwrap(); // + Integer.BYTES
     fo.write_u32::<BigEndian>(data.len() as u32 - 1).unwrap(); // GenericIndexed.size (number of columns, without timestamp)
     fo.write(&cols_index_header).unwrap();
     fo.write(&cols_index).unwrap();
     fo.write_u8(1).unwrap(); // GenericIndexed.VERSION_ONE
     fo.write_u8(0).unwrap(); // GenericIndexed.REVERSE_LOOKUP_DISALLOWED
-    fo.write_u32::<BigEndian>(209).unwrap(); // byteBuffer.cap (FIXME: NOT CONST)
+    fo.write_u32::<BigEndian>(
+        (dims_index_header.len() + dims_index.len() + 4) as u32
+    ).unwrap(); // + Integer.BYTES
     fo.write_u32::<BigEndian>(data.len() as u32 - 2).unwrap(); // GenericIndexed.size (number of dims, without timestamp and count)
     fo.write(&dims_index_header).unwrap();
     fo.write(&dims_index).unwrap();
 
     if let ValVec::Integer(ts) = &data["timestamp"] {
         fo.write_i64::<BigEndian>(ts[0]).unwrap();
-        fo.write_i64::<BigEndian>(ts[ts.len() - 1] + 86400000).unwrap(); // XXX: DAY granularity
+        fo.write_i64::<BigEndian>(ts[0] + 86400000).unwrap(); // XXX: DAY granularity
     }
 
     let bitmap_type = json!({
@@ -297,7 +314,9 @@ fn main() {
 
 
     if args.len() > 2 {
-        thread::sleep_ms(60000);
+        if args.len() > 3 {
+            thread::sleep_ms(60000);
+        }
     } else {
         println!("{:?}", data);
     }
