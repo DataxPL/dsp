@@ -1,10 +1,12 @@
 extern crate byteorder;
+extern crate concise;
 extern crate indexmap;
 #[macro_use]
 extern crate serde_json;
 extern crate string_interner;
 
 use byteorder::{BigEndian,LittleEndian,WriteBytesExt};
+use concise::CONCISE;
 use indexmap::IndexMap;
 use serde_json::{Map,Value};
 use string_interner::StringInterner;
@@ -93,6 +95,7 @@ fn main() {
     instant = Instant::now();
 
     // FIXME: Deal with this i64 vs. usize thing
+    // (usize has no negative values, but we want to have them in perm)
     let mut perm: Vec<i64> = Vec::new();
     if let ValVec::Integer(ts) = &data["timestamp"] {
         perm = (0..ts.len() as i64).collect();
@@ -198,45 +201,56 @@ fn main() {
 
                 // XXX: Maybe it's better idea to store str lengths at data
                 // creation time and avoid these buffers?
-                let mut header = vec![];
-                let mut items = vec![];
-                let mut values = vec![];
+                let mut index_header = vec![];
+                let mut index_items = vec![];
+                let mut index_values = vec![];
+
+                let mut bitmap_header = vec![];
+                let mut bitmap_values = vec![];
 
                 let mut map = IndexMap::new();
-
                 for (i, v) in is.iter().enumerate() {
                     let vs = si.resolve(*v).unwrap();
                     map.entry(vs).or_insert(Vec::new()).push(i);
                 }
-
                 map.sort_keys();
 
-                values.write_u8(0).unwrap(); // VERSION
-                values.write_u8(1).unwrap(); // numBytes
-                values.write_u32::<BigEndian>(is.len() as u32 + 3).unwrap(); // + padding
-                let vl = values.len(); // This has to be separate, to please borrow checker
-                values.resize(vl + is.len(), 0);
+                index_values.write_u8(0).unwrap(); // VERSION
+                index_values.write_u8(1).unwrap(); // numBytes
+                index_values.write_u32::<BigEndian>(is.len() as u32 + 3).unwrap(); // + padding
+                let vl = index_values.len(); // This has to be separate, to please borrow checker
+                index_values.resize(vl + is.len(), 0);
 
                 let mut offset = 0;
                 for (i, (k, v)) in map.iter().enumerate() {
                     offset += k.len() as u32 + 4; // + "nullness marker"
-                    header.write_u32::<BigEndian>(offset).unwrap();
-                    items.write_u32::<BigEndian>(0).unwrap(); // "nullness marker"
-                    items.write(k.as_bytes()).unwrap();
+                    index_header.write_u32::<BigEndian>(offset).unwrap();
+                    index_items.write_u32::<BigEndian>(0).unwrap(); // "nullness marker"
+
+                    bitmap_header.write_u32::<BigEndian>((i as u32 + 1) * 8).unwrap();
+
+                    let mut concise = CONCISE::new();
+
+                    index_items.write(k.as_bytes()).unwrap();
                     for vv in v {
-                        values[6 + vv] = i as u8;
+                        index_values[6 + vv] = i as u8;
+                        concise.append(*vv as i32);
                     }
+
+                    bitmap_values.write_u32::<BigEndian>(0).unwrap();
+                    // TODO: More than one byte of a bitmap
+                    bitmap_values.write_i32::<BigEndian>(concise.words.unwrap()[0].0).unwrap();
                 }
 
-                values.write(&[0, 0, 0]).unwrap(); // padding
+                index_values.write(&[0, 0, 0]).unwrap(); // padding
 
                 fo.write_u32::<BigEndian>(
-                    header.len() as u32 + items.len() as u32 + 4
+                    index_header.len() as u32 + index_items.len() as u32 + 4
                 ).unwrap(); // + Integer.BYTES
                 fo.write_u32::<BigEndian>(map.len() as u32).unwrap(); // numWritten
-                fo.write(&header).unwrap();
-                fo.write(&items).unwrap();
-                fo.write(&values).unwrap();
+                fo.write(&index_header).unwrap();
+                fo.write(&index_items).unwrap();
+                fo.write(&index_values).unwrap();
 
                 fo.write_u8(1).unwrap(); // VERSION
                 fo.write_u8(0).unwrap(); // REVERSE_LOOKUP_DISALLOWED
@@ -244,6 +258,9 @@ fn main() {
                 // Another header + values + 4 sizing
                 fo.write_u32::<BigEndian>(maplen * 4 + maplen * 8 + 4).unwrap();
                 fo.write_u32::<BigEndian>(map.len() as u32).unwrap();
+
+                fo.write(&bitmap_header).unwrap();
+                fo.write(&bitmap_values).unwrap();
             },
             ValVec::Integer(i) => {
                 write_numeric_header(&mut fo, &meta_types["long"], i.len() as u32);
