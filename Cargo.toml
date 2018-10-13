@@ -5,9 +5,11 @@ authors = ["KenjiTakahashi <wozniakk@gmail.com>"]
 
 [dependencies]
 byteorder = "1.2.6"
+crossbeam-channel = "0.2.6"
 indexmap = "1.0.1"
+itertools = "0.7.8"
 serde_json = { version = "1.0.32", features = ["preserve_order"] }
-string-interner = "0.7.0"
+string_cache = "0.7.3"
 concise = { path = "../concise" }
 
 [dev-dependencies]

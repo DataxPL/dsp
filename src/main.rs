@@ -1,15 +1,18 @@
 extern crate byteorder;
 extern crate concise;
+extern crate crossbeam_channel;
 extern crate indexmap;
+extern crate itertools;
 #[macro_use]
 extern crate serde_json;
-extern crate string_interner;
+extern crate string_cache;
 
 use byteorder::{BigEndian,LittleEndian,WriteBytesExt};
 use concise::CONCISE;
 use indexmap::IndexMap;
+use itertools::Itertools;
 use serde_json::{Map,Value};
-use string_interner::StringInterner;
+use string_cache::DefaultAtom as Atom;
 
 use std::collections::HashMap;
 use std::env;
@@ -50,36 +53,73 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     let file = File::open(&args[1]).unwrap();
 
-    let mut si = StringInterner::default();
     let mut data: HashMap<String, ValVec> = HashMap::new();
 
     println!("init `{:?}`", instant.elapsed());
     instant = Instant::now();
 
-    for line in BufReader::new(file).lines() {
-        let v: Map<String, Value> = serde_json::from_str(&line.unwrap()).unwrap();
-        for (key, value) in v {
-            match value {
-                Value::Number(n) => {
-                    if n.is_i64() {
-                        data
-                            .entry(key)
-                            .or_insert(ValVec::Integer(Vec::new()))
-                            .push_i(n.as_i64().unwrap());
-                    } else if n.is_f64() {
-                        data
-                            .entry(key)
-                            .or_insert(ValVec::Float(Vec::new()))
-                            .push_f(n.as_f64().unwrap());
+    let N = 16;
+
+    let (tx_ch, rx_ch): (
+        crossbeam_channel::Sender<Vec<String>>,
+        crossbeam_channel::Receiver<Vec<String>>
+    ) = crossbeam_channel::bounded(N * 4);
+    let (tx_res, rx_res) = crossbeam_channel::unbounded();
+
+    for _ in 0..N {
+        let rx_ch = rx_ch.clone();
+        let tx_res = tx_res.clone();
+        thread::spawn(move || {
+            let mut data: HashMap<String, ValVec> = HashMap::new();
+            for chunk in rx_ch {
+                for line in chunk {
+                    let v: Map<String, Value> = serde_json::from_str(&line).unwrap();
+                    for (key, value) in v {
+                        match value {
+                            Value::Number(n) => {
+                                if n.is_i64() {
+                                    data
+                                        .entry(key)
+                                        .or_insert(ValVec::Integer(Vec::new()))
+                                        .push_i(n.as_i64().unwrap());
+                                } else if n.is_f64() {
+                                    data
+                                        .entry(key)
+                                        .or_insert(ValVec::Float(Vec::new()))
+                                        .push_f(n.as_f64().unwrap());
+                                }
+                            },
+                            Value::String(s) => {
+                                data
+                                    .entry(key)
+                                    .or_insert(ValVec::InternedString(Vec::new()))
+                                    .push_is(Atom::from(s));
+                            },
+                            _ => (),
+                        }
                     }
-                },
-                Value::String(s) => {
-                    data
-                        .entry(key)
-                        .or_insert(ValVec::InternedString(Vec::new()))
-                        .push_is(si.get_or_intern(s));
-                },
-                _ => (),
+                }
+            }
+            tx_res.send(data);
+            drop(tx_res);
+        });
+    }
+
+    drop(rx_ch);
+    drop(tx_res);
+
+    for chunk_iter in &BufReader::new(file).lines().chunks(2) {
+        let chunk: Vec<String> = chunk_iter.map(|c| c.unwrap()).collect();
+        tx_ch.send(chunk);
+    }
+    drop(tx_ch);
+
+    for part in rx_res {
+        for (key, mut value) in part {
+            if !data.contains_key(&key) {
+                data.insert(key, value);
+            } else {
+                data.get_mut(&key).unwrap().append(&mut value);
             }
         }
     }
@@ -210,8 +250,7 @@ fn main() {
 
                 let mut map = IndexMap::new();
                 for (i, v) in is.iter().enumerate() {
-                    let vs = si.resolve(*v).unwrap();
-                    map.entry(vs).or_insert(Vec::new()).push(i);
+                    map.entry(v).or_insert(Vec::new()).push(i);
                 }
                 map.sort_keys();
 

@@ -1,10 +1,10 @@
-extern crate string_interner;
+extern crate string_cache;
 
-use string_interner::Sym;
+use string_cache::DefaultAtom as Atom;
 
 #[derive(Debug)]
 pub enum ValVec {
-    InternedString(Vec<Sym>),
+    InternedString(Vec<Atom>),
     Integer(Vec<i64>),
     Float(Vec<f64>),
 }
@@ -24,7 +24,7 @@ impl ValVec {
     // pub fn push2<T>(&mut self, value: T) {
     //     valvec_call!(self, push, value);
     // }
-    pub fn push_is(&mut self, value: Sym) {
+    pub fn push_is(&mut self, value: Atom) {
         match self {
             ValVec::InternedString(i) => i.push(value),
             _ => (),
@@ -40,6 +40,15 @@ impl ValVec {
         match self {
             ValVec::Float(i) => i.push(value),
             _ => (),
+        }
+    }
+
+    pub fn append(&mut self, other: &mut ValVec) {
+        match (self, other) {
+            (ValVec::InternedString(is), ValVec::InternedString(o)) => is.append(o),
+            (ValVec::Integer(i), ValVec::Integer(o)) => i.append(o),
+            (ValVec::Float(f), ValVec::Float(o)) => f.append(o),
+            (_, _) => (), // XXX: panic?
         }
     }
 }
