@@ -15,33 +15,65 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::ops::{Deref, DerefMut};
 
-fn write_numeric_header(writer: &mut Write, meta: &str, length: u32) {
-    writer.write_u32::<BigEndian>(meta.len() as u32).unwrap();
-    writer.write(meta.as_bytes()).unwrap();
-
-    writer.write_u8(2).unwrap(); // VERSION
-
-    writer.write_u32::<BigEndian>(length).unwrap(); // totalSize
-
-    writer.write_u32::<BigEndian>(8192).unwrap(); // sizePer
-    writer.write_u8(0xff).unwrap(); // compression
-    writer.write_u8(1).unwrap(); // VERSION
-    writer.write_u8(0).unwrap(); // REVERSE_LOOKUP_DISALLOWED
-    let values_size = length * 8 + 4; // [aka. headerOut] + Integer.BYTES
-    writer.write_u32::<BigEndian>(values_size + 8).unwrap(); // + headerOut size
-    writer.write_u32::<BigEndian>(1).unwrap(); // numWritten (seems it's always 1, unless
-                                           // working with multiple "chunks", merged
-                                           // together [which mode does not seem to be
-                                           // used in practice])
-    writer.write_u32::<BigEndian>(values_size).unwrap();
-    writer.write_u32::<BigEndian>(0).unwrap(); // "nullness marker"
-}
-
 #[derive(Debug)]
 pub enum ValVec {
     InternedString(Vec<Atom>),
     Integer(Vec<i64>),
     Float(Vec<f64>),
+}
+
+trait VVWrite {
+    fn write(&self, writer: &mut Write);
+}
+
+impl VVWrite for i64 {
+    fn write(&self, writer: &mut Write) {
+        writer.write_i64::<LittleEndian>(*self).unwrap();
+    }
+}
+
+impl VVWrite for f64 {
+    fn write(&self, writer: &mut Write) {
+        writer.write_f64::<LittleEndian>(*self).unwrap();
+    }
+}
+
+fn write_numeric<T: VVWrite>(writer: &mut Write, meta: &str, data: &Vec<T>) {
+    writer.write_u32::<BigEndian>(meta.len() as u32).unwrap();
+    writer.write(meta.as_bytes()).unwrap();
+
+    writer.write_u8(2).unwrap(); // VERSION
+
+    let length = data.len() as u32;
+
+    writer.write_u32::<BigEndian>(length).unwrap(); // totalSize
+
+    let size_per = 8192;
+    writer.write_u32::<BigEndian>(size_per).unwrap();
+    writer.write_u8(0xff).unwrap(); // compression
+    writer.write_u8(1).unwrap(); // VERSION
+    writer.write_u8(0).unwrap(); // REVERSE_LOOKUP_DISALLOWED
+
+    let mut header = vec![];
+    let mut values = vec![];
+
+    let batch_size = if length > size_per { size_per } else { length as u32 } * 8 + 4;
+
+    let mut offset = 0;
+    for (n, v) in data.iter().enumerate() {
+        if n % 8192 == 0 {
+            // XXX: What about last batch? {Seems it's fine, bit needs confirm}
+            offset += batch_size;
+            header.write_u32::<BigEndian>(offset).unwrap();
+            values.write_u32::<BigEndian>(0).unwrap(); // "nullness marker"
+        }
+        v.write(&mut values);
+    }
+
+    writer.write_u32::<BigEndian>((header.len() + values.len() + 4) as u32).unwrap(); // + Integer.NUM_BYTES
+    writer.write_u32::<BigEndian>((length as f64 / size_per as f64).ceil() as u32).unwrap(); // numWritten
+    writer.write(&header).unwrap();
+    writer.write(&values).unwrap();
 }
 
 #[macro_export]
@@ -312,20 +344,8 @@ impl Data {
                     writer.write(&bitmap_header).unwrap();
                     writer.write(&bitmap_values).unwrap();
                 },
-                ValVec::Integer(i) => {
-                    write_numeric_header(writer, &meta_types["long"], i.len() as u32);
-
-                    for v in i {
-                        writer.write_i64::<LittleEndian>(*v).unwrap();
-                    }
-                },
-                ValVec::Float(f) => {
-                    write_numeric_header(writer, &meta_types["double"], f.len() as u32);
-
-                    for v in f {
-                        writer.write_f64::<LittleEndian>(*v).unwrap();
-                    }
-                },
+                ValVec::Integer(i) => write_numeric(writer, &meta_types["long"], i),
+                ValVec::Float(f) => write_numeric(writer, &meta_types["double"], f),
             }
         }
 
