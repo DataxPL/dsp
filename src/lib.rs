@@ -44,12 +44,12 @@ fn write_numeric<T: VVWrite>(writer: &mut Write, meta: &str, data: &Vec<T>) {
 
     writer.write_u8(2).unwrap(); // VERSION
 
-    let length = data.len() as u32;
+    let length = data.len();
 
-    writer.write_u32::<BigEndian>(length).unwrap(); // totalSize
+    writer.write_u32::<BigEndian>(length as u32).unwrap(); // totalSize
 
     let size_per = 8192;
-    writer.write_u32::<BigEndian>(size_per).unwrap();
+    writer.write_u32::<BigEndian>(size_per as u32).unwrap();
     writer.write_u8(0xff).unwrap(); // compression
     writer.write_u8(1).unwrap(); // VERSION
     writer.write_u8(0).unwrap(); // REVERSE_LOOKUP_DISALLOWED
@@ -57,14 +57,12 @@ fn write_numeric<T: VVWrite>(writer: &mut Write, meta: &str, data: &Vec<T>) {
     let mut header = vec![];
     let mut values = vec![];
 
-    let batch_size = if length > size_per { size_per } else { length as u32 } * 8 + 4;
-
     let mut offset = 0;
     for (n, v) in data.iter().enumerate() {
-        if n % 8192 == 0 {
-            // XXX: What about last batch? {Seems it's fine, bit needs confirm}
-            offset += batch_size;
-            header.write_u32::<BigEndian>(offset).unwrap();
+        if n % size_per == 0 {
+            let r = length - n;
+            offset += if r >= size_per { size_per } else { r } * 8 + 4;
+            header.write_u32::<BigEndian>(offset as u32).unwrap();
             values.write_u32::<BigEndian>(0).unwrap(); // "nullness marker"
         }
         v.write(&mut values);
