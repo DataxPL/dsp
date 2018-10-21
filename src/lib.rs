@@ -5,7 +5,7 @@ extern crate indexmap;
 extern crate serde_json;
 extern crate string_cache;
 
-use byteorder::{BigEndian,LittleEndian,WriteBytesExt};
+use byteorder::{ByteOrder,BE,BigEndian,LE,LittleEndian,WriteBytesExt};
 use concise::CONCISE;
 use indexmap::IndexMap;
 use serde_json::Value;
@@ -294,12 +294,18 @@ impl Data {
                         map.entry(v).or_insert(Vec::new()).push(i);
                     }
                     map.sort_keys();
+                    let num_bytes = ((map.len() as f64).log2() / 8. + 1.) as usize;
+                    let num_padding = vec![0; 4 - num_bytes]; // Integer.BYTES
 
                     index_values.write_u8(0).unwrap(); // VERSION
-                    index_values.write_u8(1).unwrap(); // numBytes
-                    index_values.write_u32::<BigEndian>(is.len() as u32 + 3).unwrap(); // + padding
+                    index_values.write_u8(num_bytes as u8).unwrap(); // numBytes
+                    index_values.write_u32::<BigEndian>(
+                        (is.len() * num_bytes + num_padding.len()) as u32,
+                    ).unwrap();
                     let vl = index_values.len(); // This has to be separate, to please borrow checker
-                    index_values.resize(vl + is.len(), 0);
+                    index_values.resize(vl + is.len() * num_bytes, 0);
+
+                    bitmap_header.write_u32::<BigEndian>(map.len() as u32).unwrap();
 
                     let mut offset = 0;
                     for (i, (k, v)) in map.iter().enumerate() {
@@ -307,22 +313,44 @@ impl Data {
                         index_header.write_u32::<BigEndian>(offset).unwrap();
                         index_items.write_u32::<BigEndian>(0).unwrap(); // "nullness marker"
 
-                        bitmap_header.write_u32::<BigEndian>((i as u32 + 1) * 8).unwrap();
-
                         let mut concise = CONCISE::new();
 
                         index_items.write(k.as_bytes()).unwrap();
                         for vv in v {
-                            index_values[6 + vv] = i as u8;
+                            // TODO: Abstract this out
+                            match num_bytes {
+                                1 => index_values[vl + vv] = i as u8,
+                                2 => BE::write_u16(
+                                    &mut index_values[
+                                        vl + vv * num_bytes..vl + (vv + 1) * num_bytes
+                                    ],
+                                    i as u16,
+                                ),
+                                3 => BE::write_u24(
+                                    &mut index_values[
+                                        vl + vv * num_bytes..vl + (vv + 1) * num_bytes
+                                    ],
+                                    i as u32,
+                                ),
+                                4 => BE::write_u32(
+                                    &mut index_values[
+                                        vl + vv * num_bytes..vl + (vv + 1) * num_bytes
+                                    ],
+                                    i as u32,
+                                ),
+                                _ => (),
+                            }
                             concise.append(*vv as i32);
                         }
 
                         bitmap_values.write_u32::<BigEndian>(0).unwrap();
-                        // TODO: More than one byte of a bitmap
-                        bitmap_values.write_i32::<BigEndian>(concise.words.unwrap()[0].0).unwrap();
+                        for word in concise.words.unwrap() {
+                            bitmap_values.write_i32::<BigEndian>(word.0).unwrap();
+                        }
+                        bitmap_header.write_u32::<BigEndian>(bitmap_values.len() as u32).unwrap();
                     }
 
-                    index_values.write(&[0, 0, 0]).unwrap(); // padding
+                    index_values.write(&num_padding).unwrap();
 
                     writer.write_u32::<BigEndian>(
                         index_header.len() as u32 + index_items.len() as u32 + 4
@@ -334,10 +362,9 @@ impl Data {
 
                     writer.write_u8(1).unwrap(); // VERSION
                     writer.write_u8(0).unwrap(); // REVERSE_LOOKUP_DISALLOWED
-                    let maplen = map.len() as u32;
-                    // Another header + values + 4 sizing
-                    writer.write_u32::<BigEndian>(maplen * 4 + maplen * 8 + 4).unwrap();
-                    writer.write_u32::<BigEndian>(map.len() as u32).unwrap();
+                    writer.write_u32::<BigEndian>(
+                        (bitmap_header.len() + bitmap_values.len()) as u32,
+                    ).unwrap();
 
                     writer.write(&bitmap_header).unwrap();
                     writer.write(&bitmap_values).unwrap();
