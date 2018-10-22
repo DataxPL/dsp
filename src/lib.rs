@@ -5,7 +5,7 @@ extern crate indexmap;
 extern crate serde_json;
 extern crate string_cache;
 
-use byteorder::{ByteOrder,BE,BigEndian,LE,LittleEndian,WriteBytesExt};
+use byteorder::{BE,LE,ByteOrder,WriteBytesExt};
 use concise::CONCISE;
 use indexmap::IndexMap;
 use serde_json::Value;
@@ -28,28 +28,28 @@ trait VVWrite {
 
 impl VVWrite for i64 {
     fn write(&self, writer: &mut Write) {
-        writer.write_i64::<LittleEndian>(*self).unwrap();
+        writer.write_i64::<LE>(*self).unwrap();
     }
 }
 
 impl VVWrite for f64 {
     fn write(&self, writer: &mut Write) {
-        writer.write_f64::<LittleEndian>(*self).unwrap();
+        writer.write_f64::<LE>(*self).unwrap();
     }
 }
 
 fn write_numeric<T: VVWrite>(writer: &mut Write, meta: &str, data: &Vec<T>) {
-    writer.write_u32::<BigEndian>(meta.len() as u32).unwrap();
+    writer.write_u32::<BE>(meta.len() as u32).unwrap();
     writer.write(meta.as_bytes()).unwrap();
 
     writer.write_u8(2).unwrap(); // VERSION
 
     let length = data.len();
 
-    writer.write_u32::<BigEndian>(length as u32).unwrap(); // totalSize
+    writer.write_u32::<BE>(length as u32).unwrap(); // totalSize
 
     let size_per = 8192;
-    writer.write_u32::<BigEndian>(size_per as u32).unwrap();
+    writer.write_u32::<BE>(size_per as u32).unwrap();
     writer.write_u8(0xff).unwrap(); // compression
     writer.write_u8(1).unwrap(); // VERSION
     writer.write_u8(0).unwrap(); // REVERSE_LOOKUP_DISALLOWED
@@ -62,14 +62,14 @@ fn write_numeric<T: VVWrite>(writer: &mut Write, meta: &str, data: &Vec<T>) {
         if n % size_per == 0 {
             let r = length - n;
             offset += if r >= size_per { size_per } else { r } * 8 + 4;
-            header.write_u32::<BigEndian>(offset as u32).unwrap();
-            values.write_u32::<BigEndian>(0).unwrap(); // "nullness marker"
+            header.write_u32::<BE>(offset as u32).unwrap();
+            values.write_u32::<BE>(0).unwrap(); // "nullness marker"
         }
         v.write(&mut values);
     }
 
-    writer.write_u32::<BigEndian>((header.len() + values.len() + 4) as u32).unwrap(); // + Integer.NUM_BYTES
-    writer.write_u32::<BigEndian>((length as f64 / size_per as f64).ceil() as u32).unwrap(); // numWritten
+    writer.write_u32::<BE>((header.len() + values.len() + 4) as u32).unwrap(); // + Integer.NUM_BYTES
+    writer.write_u32::<BE>((length as f64 / size_per as f64).ceil() as u32).unwrap(); // numWritten
     writer.write(&header).unwrap();
     writer.write(&values).unwrap();
 }
@@ -245,21 +245,21 @@ impl Data {
 
             if key != "timestamp" {
                 cols_index_header_size += 4 + key.len() as u32;
-                cols_index_header.write_u32::<BigEndian>(cols_index_header_size).unwrap();
-                cols_index.write_u32::<BigEndian>(0).unwrap();
+                cols_index_header.write_u32::<BE>(cols_index_header_size).unwrap();
+                cols_index.write_u32::<BE>(0).unwrap();
                 cols_index.write(key.as_bytes()).unwrap();
 
                 if key != "count" {
                     dims_index_header_size += 4 + key.len() as u32;
-                    dims_index_header.write_u32::<BigEndian>(dims_index_header_size).unwrap();
-                    dims_index.write_u32::<BigEndian>(0).unwrap();
+                    dims_index_header.write_u32::<BE>(dims_index_header_size).unwrap();
+                    dims_index.write_u32::<BE>(0).unwrap();
                     dims_index.write(key.as_bytes()).unwrap();
                 }
             }
 
             match datum {
                 ValVec::InternedString(is) => {
-                    writer.write_u32::<BigEndian>(meta_types["string"].len() as u32).unwrap();
+                    writer.write_u32::<BE>(meta_types["string"].len() as u32).unwrap();
                     writer.write(meta_types["string"].as_bytes()).unwrap();
 
                     writer.write_u8(0).unwrap(); // VERSION (UNCOMPRESSED_SINGLE_VALUE)
@@ -285,19 +285,19 @@ impl Data {
 
                     index_values.write_u8(0).unwrap(); // VERSION
                     index_values.write_u8(num_bytes as u8).unwrap(); // numBytes
-                    index_values.write_u32::<BigEndian>(
+                    index_values.write_u32::<BE>(
                         (is.len() * num_bytes + num_padding.len()) as u32,
                     ).unwrap();
                     let vl = index_values.len(); // This has to be separate, to please borrow checker
                     index_values.resize(vl + is.len() * num_bytes, 0);
 
-                    bitmap_header.write_u32::<BigEndian>(map.len() as u32).unwrap();
+                    bitmap_header.write_u32::<BE>(map.len() as u32).unwrap();
 
                     let mut offset = 0;
                     for (i, (k, v)) in map.iter().enumerate() {
                         offset += k.len() as u32 + 4; // + "nullness marker"
-                        index_header.write_u32::<BigEndian>(offset).unwrap();
-                        index_items.write_u32::<BigEndian>(0).unwrap(); // "nullness marker"
+                        index_header.write_u32::<BE>(offset).unwrap();
+                        index_items.write_u32::<BE>(0).unwrap(); // "nullness marker"
 
                         let mut concise = CONCISE::new();
 
@@ -329,26 +329,26 @@ impl Data {
                             concise.append(*vv as i32);
                         }
 
-                        bitmap_values.write_u32::<BigEndian>(0).unwrap();
+                        bitmap_values.write_u32::<BE>(0).unwrap();
                         for word in concise.get_words() {
-                            bitmap_values.write_i32::<BigEndian>(word.0).unwrap();
+                            bitmap_values.write_i32::<BE>(word.0).unwrap();
                         }
-                        bitmap_header.write_u32::<BigEndian>(bitmap_values.len() as u32).unwrap();
+                        bitmap_header.write_u32::<BE>(bitmap_values.len() as u32).unwrap();
                     }
 
                     index_values.write(&num_padding).unwrap();
 
-                    writer.write_u32::<BigEndian>(
+                    writer.write_u32::<BE>(
                         index_header.len() as u32 + index_items.len() as u32 + 4
                     ).unwrap(); // + Integer.BYTES
-                    writer.write_u32::<BigEndian>(map.len() as u32).unwrap(); // numWritten
+                    writer.write_u32::<BE>(map.len() as u32).unwrap(); // numWritten
                     writer.write(&index_header).unwrap();
                     writer.write(&index_items).unwrap();
                     writer.write(&index_values).unwrap();
 
                     writer.write_u8(1).unwrap(); // VERSION
                     writer.write_u8(0).unwrap(); // REVERSE_LOOKUP_DISALLOWED
-                    writer.write_u32::<BigEndian>(
+                    writer.write_u32::<BE>(
                         (bitmap_header.len() + bitmap_values.len()) as u32,
                     ).unwrap();
 
@@ -362,24 +362,24 @@ impl Data {
 
         writer.write_u8(1).unwrap(); // GenericIndexed.VERSION_ONE
         writer.write_u8(0).unwrap(); // GenericIndexed.REVERSE_LOOKUP_DISALLOWED
-        writer.write_u32::<BigEndian>(
+        writer.write_u32::<BE>(
             (cols_index_header.len() + cols_index.len() + 4) as u32
         ).unwrap(); // + Integer.BYTES
-        writer.write_u32::<BigEndian>(self.0.len() as u32 - 1).unwrap(); // GenericIndexed.size (number of columns, without timestamp)
+        writer.write_u32::<BE>(self.0.len() as u32 - 1).unwrap(); // GenericIndexed.size (number of columns, without timestamp)
         writer.write(&cols_index_header).unwrap();
         writer.write(&cols_index).unwrap();
         writer.write_u8(1).unwrap(); // GenericIndexed.VERSION_ONE
         writer.write_u8(0).unwrap(); // GenericIndexed.REVERSE_LOOKUP_DISALLOWED
-        writer.write_u32::<BigEndian>(
+        writer.write_u32::<BE>(
             (dims_index_header.len() + dims_index.len() + 4) as u32
         ).unwrap(); // + Integer.BYTES
-        writer.write_u32::<BigEndian>(self.0.len() as u32 - 2).unwrap(); // GenericIndexed.size (number of dims, without timestamp and count)
+        writer.write_u32::<BE>(self.0.len() as u32 - 2).unwrap(); // GenericIndexed.size (number of dims, without timestamp and count)
         writer.write(&dims_index_header).unwrap();
         writer.write(&dims_index).unwrap();
 
         if let ValVec::Integer(ts) = &self.0["timestamp"] {
-            writer.write_i64::<BigEndian>(ts[0]).unwrap();
-            writer.write_i64::<BigEndian>(ts[0] + 86400000).unwrap(); // XXX: DAY granularity
+            writer.write_i64::<BE>(ts[0]).unwrap();
+            writer.write_i64::<BE>(ts[0] + 86400000).unwrap(); // XXX: DAY granularity
         }
 
         let bitmap_type = json!({
@@ -404,7 +404,7 @@ impl Data {
             "rollup": true,
         });
 
-        writer.write_u32::<BigEndian>(18).unwrap();
+        writer.write_u32::<BE>(18).unwrap();
         writer.write(bitmap_type.to_string().as_bytes()).unwrap();
         writer.write(generic_meta.to_string().as_bytes()).unwrap();
     }
