@@ -330,7 +330,7 @@ impl Data {
                         }
 
                         bitmap_values.write_u32::<BigEndian>(0).unwrap();
-                        for word in concise.words.unwrap() {
+                        for word in concise.get_words() {
                             bitmap_values.write_i32::<BigEndian>(word.0).unwrap();
                         }
                         bitmap_header.write_u32::<BigEndian>(bitmap_values.len() as u32).unwrap();
