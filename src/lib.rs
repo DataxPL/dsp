@@ -228,7 +228,7 @@ impl Data {
             "timestamp",
             "count",
             "vendor", "technology", "version", "ne_type", "object_id", "counter_id",
-            "granularity", "end_timestamp", "export_timestamp", "processed_timestamp",
+            "granularity", "end_timestamp", "creation_timeprint",
             "value_num",
         ];
 
