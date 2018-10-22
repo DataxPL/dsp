@@ -74,21 +74,7 @@ fn write_numeric<T: VVWrite>(writer: &mut Write, meta: &str, data: &Vec<T>) {
     writer.write(&values).unwrap();
 }
 
-#[macro_export]
-macro_rules! valvec_call {
-    ($self:ident, $fn:ident, $v:expr) => (
-        match $self {
-            ValVec::InternedString(is) => is.$fn($v as Sym),
-            ValVec::Integer(i) => i.$fn($v),
-            ValVec::Float(f) => f.$fn($v),
-        }
-    )
-}
-
 impl ValVec {
-    // pub fn push2<T>(&mut self, value: T) {
-    //     valvec_call!(self, push, value);
-    // }
     pub fn push_is(&mut self, value: Atom) {
         match self {
             ValVec::InternedString(i) => i.push(value),
@@ -113,7 +99,7 @@ impl ValVec {
             (ValVec::InternedString(is), ValVec::InternedString(o)) => is.append(o),
             (ValVec::Integer(i), ValVec::Integer(o)) => i.append(o),
             (ValVec::Float(f), ValVec::Float(o)) => f.append(o),
-            (_, _) => (), // XXX: panic?
+            (_, _) => unreachable!(),
         }
     }
 
