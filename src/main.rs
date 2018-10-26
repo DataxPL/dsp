@@ -15,7 +15,7 @@ use std::thread;
 use std::time::Instant;
 
 extern crate ds;
-use ds::{Data, ValVec};
+use ds::Data;
 
 fn main() {
     let mut instant = Instant::now();
@@ -79,9 +79,7 @@ fn main() {
         data.append(part);
     }
 
-    let rows = data.rows();
-
-    data.insert("count".to_string(), ValVec::Integer(vec![1; rows]));
+    data.preaggregate();
 
     println!("json `{:?}`", instant.elapsed());
     instant = Instant::now();

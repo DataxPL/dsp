@@ -13,10 +13,9 @@ use string_cache::DefaultAtom as Atom;
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::ops::{Deref, DerefMut};
 
 #[derive(Debug)]
-pub enum ValVec {
+enum ValVec {
     InternedString(Vec<Atom>),
     Integer(Vec<i64>),
     Float(Vec<f64>),
@@ -75,26 +74,26 @@ fn write_numeric<T: VVWrite>(writer: &mut Write, meta: &str, data: &Vec<T>) {
 }
 
 impl ValVec {
-    pub fn push_is(&mut self, value: Atom) {
+    fn push_is(&mut self, value: Atom) {
         match self {
             ValVec::InternedString(i) => i.push(value),
             _ => (),
         }
     }
-    pub fn push_i(&mut self, value: i64) {
+    fn push_i(&mut self, value: i64) {
         match self {
             ValVec::Integer(i) => i.push(value),
             _ => (),
         }
     }
-    pub fn push_f(&mut self, value: f64) {
+    fn push_f(&mut self, value: f64) {
         match self {
             ValVec::Float(i) => i.push(value),
             _ => (),
         }
     }
 
-    pub fn append(&mut self, other: &mut ValVec) {
+    fn append(&mut self, other: &mut ValVec) {
         match (self, other) {
             (ValVec::InternedString(is), ValVec::InternedString(o)) => is.append(o),
             (ValVec::Integer(i), ValVec::Integer(o)) => i.append(o),
@@ -103,7 +102,7 @@ impl ValVec {
         }
     }
 
-    pub fn len(&self) -> usize {
+    fn len(&self) -> usize {
         match self {
             ValVec::InternedString(s) => s.len(),
             ValVec::Integer(i) => i.len(),
@@ -114,20 +113,6 @@ impl ValVec {
 
 #[derive(Debug)]
 pub struct Data(HashMap<String, ValVec>);
-
-impl Deref for Data {
-    type Target = HashMap<String, ValVec>;
-
-    fn deref(&self) -> &HashMap<String, ValVec> {
-        &self.0
-    }
-}
-
-impl DerefMut for Data {
-    fn deref_mut(&mut self) -> &mut HashMap<String, ValVec> {
-        &mut self.0
-    }
-}
 
 impl Data {
     pub fn new() -> Data {
@@ -156,11 +141,16 @@ impl Data {
         }
     }
 
-    pub fn rows(&self) -> usize {
+    fn rows(&self) -> usize {
         match self.0.values().next() {
             Some(val) => val.len(),
             None => 0,
         }
+    }
+
+    pub fn preaggregate(&mut self) {
+        let rows = self.rows();
+        self.0.insert("count".to_string(), ValVec::Integer(vec![1; rows]));
     }
 
     pub fn sort(&mut self) {
