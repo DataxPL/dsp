@@ -2,17 +2,35 @@ extern crate byteorder;
 extern crate concise;
 extern crate indexmap;
 #[macro_use]
+extern crate lazy_static;
+#[macro_use]
 extern crate serde_json;
 extern crate string_cache;
+extern crate structopt;
 
 use byteorder::{BE,LE,ByteOrder,WriteBytesExt};
 use concise::CONCISE;
 use indexmap::IndexMap;
 use serde_json::Value;
 use string_cache::DefaultAtom as Atom;
+use structopt::StructOpt;
 
 use std::collections::HashMap;
 use std::io::Write;
+
+#[derive(StructOpt)]
+#[structopt(name = "ds")]
+pub struct Conf {
+    #[structopt(short = "c", long = "compression", default_value = "none")]
+    compression: String, // TODO: Make it enum?
+
+    #[structopt(name = "FILE")]
+    pub file: String,
+}
+
+lazy_static! {
+    pub static ref conf: Conf = Conf::from_args();
+}
 
 #[derive(Debug)]
 enum ValVec {

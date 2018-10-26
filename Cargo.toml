@@ -8,10 +8,11 @@ byteorder = "1.2.6"
 crossbeam-channel = "0.2.6"
 indexmap = "1.0.2"
 itertools = "0.7.8"
+lazy_static = "1.1.0"
 serde_json = { version = "1.0.32", features = ["preserve_order"] }
 string_cache = "0.7.3"
+structopt = "0.2.12"
 concise = { path = "../concise" }
 
 [dev-dependencies]
-lazy_static = "1.1.0"
 rand = "0.5.5"

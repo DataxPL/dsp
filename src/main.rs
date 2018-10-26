@@ -7,7 +7,6 @@ use itertools::Itertools;
 use serde_json::{Map,Value};
 use string_cache::DefaultAtom as Atom;
 
-use std::env;
 use std::fs::File;
 use std::io::{BufRead,BufReader,BufWriter};
 // use std::mem::size_of;
@@ -15,13 +14,12 @@ use std::thread;
 use std::time::Instant;
 
 extern crate ds;
-use ds::Data;
+use ds::{Data,conf};
 
 fn main() {
     let mut instant = Instant::now();
 
-    let args: Vec<String> = env::args().collect();
-    let file = File::open(&args[1]).unwrap();
+    let file = File::open(&conf.file).unwrap();
 
     let mut data = Data::new();
 
@@ -97,11 +95,11 @@ fn main() {
     println!("dump `{:?}`", instant.elapsed());
 
 
-    if args.len() > 2 {
-        if args.len() > 3 {
-            thread::sleep_ms(60000);
-        }
-    } else {
-        println!("{:?}", data);
-    }
+    // if args.len() > 2 {
+    //     if args.len() > 3 {
+    //         thread::sleep_ms(60000);
+    //     }
+    // } else {
+    //     println!("{:?}", data);
+    // }
 }
