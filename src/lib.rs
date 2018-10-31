@@ -154,6 +154,49 @@ impl Data {
     }
 
     pub fn sort(&mut self) {
+        // TODO: Refactor
+        let mut perm: Vec<usize> = Vec::new();
+        if let ValVec::Integer(ts) = &self.0["timestamp"] {
+            perm = (0..ts.len()).collect();
+            perm.sort_unstable_by_key(|&i| &ts[i]);
+        }
+        let mut new0 = HashMap::new();
+        for (k, v) in &self.0 {
+            match v {
+                ValVec::Integer(i) => new0.insert(k.to_string(), ValVec::Integer(vec![0; i.len()])),
+                ValVec::Float(i) => new0.insert(k.to_string(), ValVec::Float(vec![0.; i.len()])),
+                ValVec::InternedString(i) => new0.insert(k.to_string(), ValVec::InternedString(vec![Atom::default(); i.len()])),
+            };
+        }
+        for (k, v) in self.0.iter_mut() {
+            match v {
+                ValVec::Integer(i) => {
+                    if let ValVec::Integer(h) = new0.get_mut(k).unwrap() {
+                        for (dest_pos, curr_pos) in perm.iter().enumerate() {
+                            h[dest_pos] = i[*curr_pos];
+                        }
+                    }
+                },
+                ValVec::Float(i) => {
+                    if let ValVec::Float(h) = new0.get_mut(k).unwrap() {
+                        for (dest_pos, curr_pos) in perm.iter().enumerate() {
+                            h[dest_pos] = i[*curr_pos];
+                        }
+                    }
+                },
+                ValVec::InternedString(i) => {
+                    if let ValVec::InternedString(h) = new0.get_mut(k).unwrap() {
+                        for (dest_pos, curr_pos) in perm.iter().enumerate() {
+                            h[dest_pos] = i[*curr_pos].clone();
+                        }
+                    }
+                },
+            }
+        }
+        self.0 = new0;
+    }
+
+    fn sort_in_place(&mut self) {
         // FIXME: Deal with this i64 vs. usize thing
         // (usize has no negative values, but we want to have them in perm)
         let mut perm: Vec<i64> = Vec::new();
