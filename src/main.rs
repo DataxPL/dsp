@@ -26,15 +26,13 @@ fn main() {
     println!("init `{:?}`", instant.elapsed());
     instant = Instant::now();
 
-    let N = 16;
-
     let (tx_ch, rx_ch): (
         crossbeam_channel::Sender<Vec<String>>,
         crossbeam_channel::Receiver<Vec<String>>
-    ) = crossbeam_channel::bounded(N * 4);
+    ) = crossbeam_channel::bounded(conf.threads * 4);
     let (tx_res, rx_res) = crossbeam_channel::unbounded();
 
-    for _ in 0..N {
+    for _ in 0..conf.threads {
         let rx_ch = rx_ch.clone();
         let tx_res = tx_res.clone();
         thread::spawn(move || {

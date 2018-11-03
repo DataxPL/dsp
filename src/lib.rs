@@ -6,6 +6,7 @@ extern crate indexmap;
 #[macro_use]
 extern crate lazy_static;
 extern crate lz4;
+extern crate num_cpus;
 #[macro_use]
 extern crate serde_json;
 extern crate string_cache;
@@ -40,11 +41,15 @@ pub struct Conf {
     )]
     compression: Compression,
 
+    #[structopt(short, long, raw(default_value = "&numcpus"))]
+    pub threads: usize,
+
     #[structopt(name = "FILE")]
     pub file: String,
 }
 
 lazy_static! {
+    static ref numcpus: String = num_cpus::get().to_string();
     pub static ref conf: Conf = Conf::from_args();
 }
 
