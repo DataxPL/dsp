@@ -93,9 +93,9 @@ fn write_numeric_batch(all: &mut Vec<u8>, batch: &mut Vec<u8>) {
     batch.clear();
 }
 
-fn write_numeric<T: VVWrite>(writer: &mut Write, meta: &str, data: &Vec<T>) {
+fn write_numeric<T: VVWrite>(writer: &mut Write, meta: &str, data: &[T]) {
     writer.write_u32::<BE>(meta.len() as u32).unwrap();
-    writer.write(meta.as_bytes()).unwrap();
+    writer.write_all(meta.as_bytes()).unwrap();
 
     writer.write_u8(2).unwrap(); // VERSION
 
@@ -126,28 +126,21 @@ fn write_numeric<T: VVWrite>(writer: &mut Write, meta: &str, data: &Vec<T>) {
 
     writer.write_u32::<BE>((header.len() + values_all.len() + 4) as u32).unwrap(); // + Integer.NUM_BYTES
     writer.write_u32::<BE>((length as f64 / size_per as f64).ceil() as u32).unwrap(); // numWritten
-    writer.write(&header).unwrap();
-    writer.write(&values_all).unwrap();
+    writer.write_all(&header).unwrap();
+    writer.write_all(&values_all).unwrap();
 }
 
 impl ValVec {
     fn push_is(&mut self, value: Atom) {
-        match self {
-            ValVec::InternedString(i) => i.push(value),
-            _ => (),
-        }
+        if let ValVec::InternedString(is) = self { is.push(value) }
     }
+
     fn push_i(&mut self, value: i64) {
-        match self {
-            ValVec::Integer(i) => i.push(value),
-            _ => (),
-        }
+        if let ValVec::Integer(i) = self { i.push(value) }
     }
+
     fn push_f(&mut self, value: f64) {
-        match self {
-            ValVec::Float(i) => i.push(value),
-            _ => (),
-        }
+        if let ValVec::Float(f) = self { f.push(value) }
     }
 
     fn append(&mut self, other: &mut ValVec) {
@@ -168,33 +161,37 @@ impl ValVec {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Data(HashMap<String, ValVec>);
 
 impl Data {
-    pub fn new() -> Data {
-        return Data(HashMap::new());
+    pub fn new() -> Self {
+        Data(HashMap::new())
     }
 
     pub fn add_s(&mut self, key: String, value: Atom) {
-        self.0.entry(key).or_insert(ValVec::InternedString(Vec::new())).push_is(value);
+        self.0.entry(key)
+            .or_insert_with(|| ValVec::InternedString(Vec::new()))
+            .push_is(value);
     }
 
     pub fn add_i(&mut self, key: String, value: i64) {
-        self.0.entry(key).or_insert(ValVec::Integer(Vec::new())).push_i(value);
+        self.0.entry(key)
+            .or_insert_with(|| ValVec::Integer(Vec::new()))
+            .push_i(value);
     }
 
     pub fn add_f(&mut self, key: String, value: f64) {
-        self.0.entry(key).or_insert(ValVec::Float(Vec::new())).push_f(value);
+        self.0.entry(key)
+            .or_insert_with(|| ValVec::Float(Vec::new()))
+            .push_f(value);
     }
 
     pub fn append(&mut self, other: Data) {
         for (key, mut value) in other.0 {
-            if !self.0.contains_key(&key) {
-                self.0.insert(key, value);
-            } else {
-                self.0.get_mut(&key).unwrap().append(&mut value);
-            }
+            self.0.entry(key)
+                .and_modify(|e| e.append(&mut value))
+                .or_insert(value);
         }
     }
 
@@ -331,26 +328,26 @@ impl Data {
         let mut dims_index = vec![];
 
         for key in keys {
-            let datum = self.0.get(key).unwrap();
+            let datum = &self.0[key];
 
             if key != "timestamp" {
                 cols_index_header_size += 4 + key.len() as u32;
                 cols_index_header.write_u32::<BE>(cols_index_header_size).unwrap();
                 cols_index.write_u32::<BE>(0).unwrap();
-                cols_index.write(key.as_bytes()).unwrap();
+                cols_index.write_all(key.as_bytes()).unwrap();
 
                 if key != "count" {
                     dims_index_header_size += 4 + key.len() as u32;
                     dims_index_header.write_u32::<BE>(dims_index_header_size).unwrap();
                     dims_index.write_u32::<BE>(0).unwrap();
-                    dims_index.write(key.as_bytes()).unwrap();
+                    dims_index.write_all(key.as_bytes()).unwrap();
                 }
             }
 
             match datum {
                 ValVec::InternedString(is) => {
                     writer.write_u32::<BE>(meta_types["string"].len() as u32).unwrap();
-                    writer.write(meta_types["string"].as_bytes()).unwrap();
+                    writer.write_all(meta_types["string"].as_bytes()).unwrap();
 
                     match conf.compression {
                         Compression::None => writer.write_u8(0).unwrap(), // VERSION (UNCOMPRESSED_SINGLE_VALUE)
@@ -394,7 +391,7 @@ impl Data {
 
                         let mut concise = CONCISE::new();
 
-                        index_items.write(k.as_bytes()).unwrap();
+                        index_items.write_all(k.as_bytes()).unwrap();
                         for vv in v {
                             // TODO: Abstract this out
                             match num_bytes {
@@ -429,14 +426,14 @@ impl Data {
                         bitmap_header.write_u32::<BE>(bitmap_values.len() as u32).unwrap();
                     }
 
-                    index_values.write(&num_padding).unwrap();
+                    index_values.write_all(&num_padding).unwrap();
 
                     writer.write_u32::<BE>(
                         index_header.len() as u32 + index_items.len() as u32 + 4
                     ).unwrap(); // + Integer.BYTES
                     writer.write_u32::<BE>(map.len() as u32).unwrap(); // numWritten
-                    writer.write(&index_header).unwrap();
-                    writer.write(&index_items).unwrap();
+                    writer.write_all(&index_header).unwrap();
+                    writer.write_all(&index_items).unwrap();
                     compress(writer, &index_values);
 
                     writer.write_u8(1).unwrap(); // VERSION
@@ -445,8 +442,8 @@ impl Data {
                         (bitmap_header.len() + bitmap_values.len()) as u32,
                     ).unwrap();
 
-                    writer.write(&bitmap_header).unwrap();
-                    writer.write(&bitmap_values).unwrap();
+                    writer.write_all(&bitmap_header).unwrap();
+                    writer.write_all(&bitmap_values).unwrap();
                 },
                 ValVec::Integer(i) => write_numeric(writer, &meta_types["long"], i),
                 ValVec::Float(f) => write_numeric(writer, &meta_types["double"], f),
@@ -459,20 +456,20 @@ impl Data {
             (cols_index_header.len() + cols_index.len() + 4) as u32
         ).unwrap(); // + Integer.BYTES
         writer.write_u32::<BE>(self.0.len() as u32 - 1).unwrap(); // GenericIndexed.size (number of columns, without timestamp)
-        writer.write(&cols_index_header).unwrap();
-        writer.write(&cols_index).unwrap();
+        writer.write_all(&cols_index_header).unwrap();
+        writer.write_all(&cols_index).unwrap();
         writer.write_u8(1).unwrap(); // GenericIndexed.VERSION_ONE
         writer.write_u8(0).unwrap(); // GenericIndexed.REVERSE_LOOKUP_DISALLOWED
         writer.write_u32::<BE>(
             (dims_index_header.len() + dims_index.len() + 4) as u32
         ).unwrap(); // + Integer.BYTES
         writer.write_u32::<BE>(self.0.len() as u32 - 2).unwrap(); // GenericIndexed.size (number of dims, without timestamp and count)
-        writer.write(&dims_index_header).unwrap();
-        writer.write(&dims_index).unwrap();
+        writer.write_all(&dims_index_header).unwrap();
+        writer.write_all(&dims_index).unwrap();
 
         if let ValVec::Integer(ts) = &self.0["timestamp"] {
             writer.write_i64::<BE>(ts[0]).unwrap();
-            writer.write_i64::<BE>(ts[0] + 86400000).unwrap(); // XXX: DAY granularity
+            writer.write_i64::<BE>(ts[0] + 86_400_000).unwrap(); // XXX: DAY granularity
         }
 
         let bitmap_type = json!({
@@ -498,7 +495,7 @@ impl Data {
         });
 
         writer.write_u32::<BE>(18).unwrap();
-        writer.write(bitmap_type.to_string().as_bytes()).unwrap();
-        writer.write(generic_meta.to_string().as_bytes()).unwrap();
+        writer.write_all(bitmap_type.to_string().as_bytes()).unwrap();
+        writer.write_all(generic_meta.to_string().as_bytes()).unwrap();
     }
 }
