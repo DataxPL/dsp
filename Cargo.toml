@@ -6,6 +6,7 @@ authors = ["KenjiTakahashi <wozniakk@gmail.com>"]
 [dependencies]
 byteorder = "1.2.6"
 clap = "2.21"  # This has to be in sync with version in "structopt" dep
+concise = { path = "../concise", version = "0.2.0" }
 crossbeam-channel = "0.2.6"
 indexmap = "1.0.2"
 itertools = "0.7.8"
@@ -14,7 +15,6 @@ lz4 = "1.23.0"
 serde_json = { version = "1.0.32", features = ["preserve_order"] }
 string_cache = "0.7.3"
 structopt = "0.2.12"
-concise = { path = "../concise" }
 
 [dev-dependencies]
 rand = "0.5.5"

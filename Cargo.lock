@@ -111,7 +111,7 @@ dependencies = [
 
 [[package]]
 name = "concise"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "crossbeam-channel"
@@ -149,7 +149,7 @@ version = "0.2.0"
 dependencies = [
  "byteorder 1.2.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "clap 2.32.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "concise 0.1.0",
+ "concise 0.2.0",
  "crossbeam-channel 0.2.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "indexmap 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "itertools 0.7.8 (registry+https://github.com/rust-lang/crates.io-index)",
