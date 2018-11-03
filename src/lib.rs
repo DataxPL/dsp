@@ -32,8 +32,7 @@ arg_enum! {
 #[derive(StructOpt)]
 #[structopt(name = "ds")]
 pub struct Conf {
-    #[structopt(
-        short = "c", long = "compression", default_value = "none",
+    #[structopt(short, long, default_value = "none",
         raw(
             possible_values = "&Compression::variants()",
             case_insensitive = "true",
