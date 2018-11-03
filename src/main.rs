@@ -65,7 +65,7 @@ fn main() {
     drop(rx_ch);
     drop(tx_res);
 
-    for chunk_iter in &BufReader::new(file).lines().chunks(2) {
+    for chunk_iter in &BufReader::new(file).lines().chunks(1000) {
         let chunk: Vec<String> = chunk_iter.map(|c| c.unwrap()).collect();
         tx_ch.send(chunk);
     }
