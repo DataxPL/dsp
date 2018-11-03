@@ -1,8 +1,11 @@
 extern crate byteorder;
+#[macro_use]
+extern crate clap;
 extern crate concise;
 extern crate indexmap;
 #[macro_use]
 extern crate lazy_static;
+extern crate lz4;
 #[macro_use]
 extern crate serde_json;
 extern crate string_cache;
@@ -18,11 +21,25 @@ use structopt::StructOpt;
 use std::collections::HashMap;
 use std::io::Write;
 
+arg_enum! {
+    #[derive(Clone, Copy)]
+    enum Compression {
+        None = 0xff,
+        LZ4 = 0x1,
+    }
+}
+
 #[derive(StructOpt)]
 #[structopt(name = "ds")]
 pub struct Conf {
-    #[structopt(short = "c", long = "compression", default_value = "none")]
-    compression: String, // TODO: Make it enum?
+    #[structopt(
+        short = "c", long = "compression", default_value = "none",
+        raw(
+            possible_values = "&Compression::variants()",
+            case_insensitive = "true",
+        ),
+    )]
+    compression: Compression,
 
     #[structopt(name = "FILE")]
     pub file: String,
@@ -55,6 +72,23 @@ impl VVWrite for f64 {
     }
 }
 
+fn compress(out: &mut Write, data: &[u8]) {
+    match conf.compression {
+        Compression::None => out.write(&data).unwrap(),
+        Compression::LZ4 => out.write(&lz4::block::compress(
+            &data,
+            Some(lz4::block::CompressionMode::HIGHCOMPRESSION(9)),
+            false,
+        ).unwrap()).unwrap(),
+    };
+}
+
+fn write_numeric_batch(all: &mut Vec<u8>, batch: &mut Vec<u8>) {
+    all.write_u32::<BE>(0).unwrap(); // "nullness marker"
+    compress(all, &batch);
+    batch.clear();
+}
+
 fn write_numeric<T: VVWrite>(writer: &mut Write, meta: &str, data: &Vec<T>) {
     writer.write_u32::<BE>(meta.len() as u32).unwrap();
     writer.write(meta.as_bytes()).unwrap();
@@ -67,28 +101,29 @@ fn write_numeric<T: VVWrite>(writer: &mut Write, meta: &str, data: &Vec<T>) {
 
     let size_per = 8192;
     writer.write_u32::<BE>(size_per as u32).unwrap();
-    writer.write_u8(0xff).unwrap(); // compression
+    writer.write_u8(conf.compression as u8).unwrap(); // compression
     writer.write_u8(1).unwrap(); // VERSION
     writer.write_u8(0).unwrap(); // REVERSE_LOOKUP_DISALLOWED
 
     let mut header = vec![];
-    let mut values = vec![];
+    let mut values_all = vec![];
+    let mut values_batch = vec![];
 
-    let mut offset = 0;
     for (n, v) in data.iter().enumerate() {
-        if n % size_per == 0 {
-            let r = length - n;
-            offset += if r >= size_per { size_per } else { r } * 8 + 4;
-            header.write_u32::<BE>(offset as u32).unwrap();
-            values.write_u32::<BE>(0).unwrap(); // "nullness marker"
+        if n > 0 && n % size_per == 0 {
+            write_numeric_batch(&mut values_all, &mut values_batch);
+            header.write_u32::<BE>(values_all.len() as u32).unwrap();
         }
-        v.write(&mut values);
+        v.write(&mut values_batch);
     }
 
-    writer.write_u32::<BE>((header.len() + values.len() + 4) as u32).unwrap(); // + Integer.NUM_BYTES
+    write_numeric_batch(&mut values_all, &mut values_batch);
+    header.write_u32::<BE>(values_all.len() as u32).unwrap();
+
+    writer.write_u32::<BE>((header.len() + values_all.len() + 4) as u32).unwrap(); // + Integer.NUM_BYTES
     writer.write_u32::<BE>((length as f64 / size_per as f64).ceil() as u32).unwrap(); // numWritten
     writer.write(&header).unwrap();
-    writer.write(&values).unwrap();
+    writer.write(&values_all).unwrap();
 }
 
 impl ValVec {
@@ -313,7 +348,10 @@ impl Data {
                     writer.write_u32::<BE>(meta_types["string"].len() as u32).unwrap();
                     writer.write(meta_types["string"].as_bytes()).unwrap();
 
-                    writer.write_u8(0).unwrap(); // VERSION (UNCOMPRESSED_SINGLE_VALUE)
+                    match conf.compression {
+                        Compression::None => writer.write_u8(0).unwrap(), // VERSION (UNCOMPRESSED_SINGLE_VALUE)
+                        Compression::LZ4 => writer.write_u8(2).unwrap(), // VERSION (COMPRESSED)
+                    }
                     writer.write_u8(1).unwrap(); // VERSION_ONE
                     writer.write_u8(1).unwrap(); // REVERSE_LOOKUP_ALLOWED
 
@@ -395,7 +433,7 @@ impl Data {
                     writer.write_u32::<BE>(map.len() as u32).unwrap(); // numWritten
                     writer.write(&index_header).unwrap();
                     writer.write(&index_items).unwrap();
-                    writer.write(&index_values).unwrap();
+                    compress(writer, &index_values);
 
                     writer.write_u8(1).unwrap(); // VERSION
                     writer.write_u8(0).unwrap(); // REVERSE_LOOKUP_DISALLOWED
