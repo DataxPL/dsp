@@ -77,6 +77,7 @@ impl VVWrite for f64 {
 }
 
 fn compress(out: &mut Write, data: &[u8]) {
+    out.write_u32::<BE>(0).unwrap(); // "nullness marker"
     match conf.compression {
         Compression::None => out.write(&data).unwrap(),
         Compression::LZ4 => out.write(&lz4::block::compress(
@@ -88,7 +89,6 @@ fn compress(out: &mut Write, data: &[u8]) {
 }
 
 fn write_numeric_batch(all: &mut Vec<u8>, batch: &mut Vec<u8>) {
-    all.write_u32::<BE>(0).unwrap(); // "nullness marker"
     compress(all, &batch);
     batch.clear();
 }
@@ -157,6 +157,37 @@ impl ValVec {
             ValVec::InternedString(s) => s.len(),
             ValVec::Integer(i) => i.len(),
             ValVec::Float(f) => f.len(),
+        }
+    }
+}
+
+struct VInt {
+    size: usize,
+}
+
+impl VInt {
+    fn new(len: usize) -> Self {
+        Self{
+            size: ((len as f64).log2() / 8. + 1.) as usize,
+        }
+    }
+
+    fn write_value(&self, out: &mut [u8], val: usize) {
+        match self.size {
+            1 => out[0] = val as u8,
+            2 => match conf.compression {
+                Compression::None => BE::write_u16(out, val as u16),
+                Compression::LZ4 => LE::write_u16(out, val as u16),
+            },
+            3 => match conf.compression {
+                Compression::None => BE::write_u24(out, val as u32),
+                Compression::LZ4 => LE::write_u24(out, val as u32),
+            },
+            4 => match conf.compression {
+                Compression::None => BE::write_u32(out, val as u32),
+                Compression::LZ4 => LE::write_u32(out, val as u32),
+            },
+            _ => (),
         }
     }
 }
@@ -349,9 +380,31 @@ impl Data {
                     writer.write_u32::<BE>(meta_types["string"].len() as u32).unwrap();
                     writer.write_all(meta_types["string"].as_bytes()).unwrap();
 
+                    let mut map = IndexMap::new();
+                    for (i, v) in is.iter().enumerate() {
+                        map.entry(v).or_insert(Vec::new()).push(i);
+                    }
+                    map.sort_keys();
+
+                    let vint = VInt::new(map.len());
+                    let num_padding = vec![0; 4 - vint.size]; // Integer.BYTES
+
+                    let mut index_values_header = vec![];
+
                     match conf.compression {
-                        Compression::None => writer.write_u8(0).unwrap(), // VERSION (UNCOMPRESSED_SINGLE_VALUE)
-                        Compression::LZ4 => writer.write_u8(2).unwrap(), // VERSION (COMPRESSED)
+                        Compression::None => {
+                            writer.write_u8(0).unwrap(); // VERSION (UNCOMPRESSED_SINGLE_VALUE)
+                            index_values_header.write_u8(0).unwrap(); // VERSION
+                            index_values_header.write_u8(vint.size as u8).unwrap(); // numBytes
+                            index_values_header.write_u32::<BE>(
+                                (is.len() * vint.size + num_padding.len()) as u32,
+                            ).unwrap();
+                        },
+                        Compression::LZ4 => {
+                            writer.write_u8(2).unwrap(); // VERSION (COMPRESSED)
+                            writer.write_u32::<BE>(0).unwrap(); // flags (stores info about bitmap/multivalue,
+                                                                // our desired one turns out to be `0`).
+                        },
                     }
                     writer.write_u8(1).unwrap(); // VERSION_ONE
                     writer.write_u8(1).unwrap(); // REVERSE_LOOKUP_ALLOWED
@@ -360,26 +413,10 @@ impl Data {
                     // creation time and avoid these buffers?
                     let mut index_header = vec![];
                     let mut index_items = vec![];
-                    let mut index_values = vec![];
+                    let mut index_values = vec![0; is.len() * vint.size];
 
                     let mut bitmap_header = vec![];
                     let mut bitmap_values = vec![];
-
-                    let mut map = IndexMap::new();
-                    for (i, v) in is.iter().enumerate() {
-                        map.entry(v).or_insert(Vec::new()).push(i);
-                    }
-                    map.sort_keys();
-                    let num_bytes = ((map.len() as f64).log2() / 8. + 1.) as usize;
-                    let num_padding = vec![0; 4 - num_bytes]; // Integer.BYTES
-
-                    index_values.write_u8(0).unwrap(); // VERSION
-                    index_values.write_u8(num_bytes as u8).unwrap(); // numBytes
-                    index_values.write_u32::<BE>(
-                        (is.len() * num_bytes + num_padding.len()) as u32,
-                    ).unwrap();
-                    let vl = index_values.len(); // This has to be separate, to please borrow checker
-                    index_values.resize(vl + is.len() * num_bytes, 0);
 
                     bitmap_header.write_u32::<BE>(map.len() as u32).unwrap();
 
@@ -393,29 +430,10 @@ impl Data {
 
                         index_items.write_all(k.as_bytes()).unwrap();
                         for vv in v {
-                            // TODO: Abstract this out
-                            match num_bytes {
-                                1 => index_values[vl + vv] = i as u8,
-                                2 => BE::write_u16(
-                                    &mut index_values[
-                                        vl + vv * num_bytes..vl + (vv + 1) * num_bytes
-                                    ],
-                                    i as u16,
-                                ),
-                                3 => BE::write_u24(
-                                    &mut index_values[
-                                        vl + vv * num_bytes..vl + (vv + 1) * num_bytes
-                                    ],
-                                    i as u32,
-                                ),
-                                4 => BE::write_u32(
-                                    &mut index_values[
-                                        vl + vv * num_bytes..vl + (vv + 1) * num_bytes
-                                    ],
-                                    i as u32,
-                                ),
-                                _ => (),
-                            }
+                            vint.write_value(
+                                &mut index_values[vv * vint.size..(vv + 1) * vint.size],
+                                i,
+                            );
                             concise.append(*vv as i32);
                         }
 
@@ -426,15 +444,43 @@ impl Data {
                         bitmap_header.write_u32::<BE>(bitmap_values.len() as u32).unwrap();
                     }
 
-                    index_values.write_all(&num_padding).unwrap();
-
                     writer.write_u32::<BE>(
                         index_header.len() as u32 + index_items.len() as u32 + 4
                     ).unwrap(); // + Integer.BYTES
                     writer.write_u32::<BE>(map.len() as u32).unwrap(); // numWritten
                     writer.write_all(&index_header).unwrap();
                     writer.write_all(&index_items).unwrap();
-                    compress(writer, &index_values);
+
+                    match conf.compression {
+                        Compression::None => {
+                            index_values.write_all(&num_padding).unwrap();
+                            writer.write_all(&index_values_header).unwrap();
+                            writer.write_all(&index_values).unwrap();
+                        },
+                        Compression::LZ4 => {
+                            let chunk_factor = 65536 / 2_usize.pow((vint.size - 1) as u32);
+
+                            index_values_header.write_u32::<BE>((is.len() as f64 / chunk_factor as f64).ceil() as u32).unwrap();
+
+                            let mut index_values_c = vec![];
+                            for chunk in index_values.chunks(65536) {
+                                compress(&mut index_values_c, chunk);
+                                index_values_header.write_u32::<BE>(index_values_c.len() as u32).unwrap();
+                            }
+
+                            writer.write_u8(2).unwrap(); // VERSION
+                            writer.write_u8(vint.size as u8).unwrap();
+                            writer.write_u32::<BE>(is.len() as u32).unwrap();
+                            writer.write_u32::<BE>(chunk_factor as u32).unwrap(); // chunkFactor
+                            writer.write_u8(conf.compression as u8).unwrap();
+                            writer.write_u8(1).unwrap(); // VERSION_ONE
+                            writer.write_u8(0).unwrap(); // REVERSE_LOOKUP_DISALLOWED
+                            writer.write_u32::<BE>((index_values_header.len() + index_values_c.len()) as u32).unwrap();
+                            writer.write_all(&index_values_header).unwrap();
+
+                            writer.write_all(&index_values_c).unwrap();
+                        },
+                    }
 
                     writer.write_u8(1).unwrap(); // VERSION
                     writer.write_u8(0).unwrap(); // REVERSE_LOOKUP_DISALLOWED

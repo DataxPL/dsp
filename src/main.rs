@@ -85,7 +85,7 @@ fn main() {
     println!("sort `{:?}`", instant.elapsed());
     instant = Instant::now();
 
-    let fop = File::create("00000.smoosh").unwrap();
+    let fop = File::create("22222.smoosh").unwrap();
     let mut fo = BufWriter::new(fop);
 
     data.write(&mut fo);
