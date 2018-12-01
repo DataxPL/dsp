@@ -12,12 +12,12 @@ use std::thread;
 use std::time::Instant;
 
 extern crate ds;
-use ds::{Data,conf};
+use ds::{Data, conf};
 
 fn main() {
     let mut instant = Instant::now();
 
-    let file = File::open(&conf.file).unwrap();
+    let file = File::open(&conf::vals.file).unwrap();
 
     let mut data = Data::new();
 
@@ -27,10 +27,10 @@ fn main() {
     let (tx_ch, rx_ch): (
         crossbeam_channel::Sender<Vec<String>>,
         crossbeam_channel::Receiver<Vec<String>>
-    ) = crossbeam_channel::bounded(conf.threads * 4);
+    ) = crossbeam_channel::bounded(conf::vals.threads * 4);
     let (tx_res, rx_res) = crossbeam_channel::unbounded();
 
-    for _ in 0..conf.threads {
+    for _ in 0..conf::vals.threads {
         let rx_ch = rx_ch.clone();
         let tx_res = tx_res.clone();
         thread::spawn(move || {

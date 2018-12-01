@@ -10,7 +10,6 @@ use std::io::Write;
 
 use conf;
 use compress;
-use Compression;
 
 struct VInt {
     size: usize,
@@ -26,17 +25,17 @@ impl VInt {
     fn write_value(&self, out: &mut Write, val: usize) {
         match self.size {
             1 => out.write_u8(val as u8).unwrap(),
-            2 => match conf.compression {
-                Compression::None => out.write_u16::<BE>(val as u16).unwrap(),
-                Compression::LZ4 => out.write_u16::<LE>(val as u16).unwrap(),
+            2 => match conf::vals.compression {
+                conf::Compression::None => out.write_u16::<BE>(val as u16).unwrap(),
+                conf::Compression::LZ4 => out.write_u16::<LE>(val as u16).unwrap(),
             },
-            3 => match conf.compression {
-                Compression::None => out.write_u24::<BE>(val as u32).unwrap(),
-                Compression::LZ4 => out.write_u24::<LE>(val as u32).unwrap(),
+            3 => match conf::vals.compression {
+                conf::Compression::None => out.write_u24::<BE>(val as u32).unwrap(),
+                conf::Compression::LZ4 => out.write_u24::<LE>(val as u32).unwrap(),
             },
-            4 => match conf.compression {
-                Compression::None => out.write_u32::<BE>(val as u32).unwrap(),
-                Compression::LZ4 => out.write_u32::<LE>(val as u32).unwrap(),
+            4 => match conf::vals.compression {
+                conf::Compression::None => out.write_u32::<BE>(val as u32).unwrap(),
+                conf::Compression::LZ4 => out.write_u32::<LE>(val as u32).unwrap(),
             },
             _ => (),
         }
@@ -94,8 +93,8 @@ impl IS {
             bitmap_header.write_u32::<BE>(bitmap_values.len() as u32).unwrap();
         }
 
-        match conf.compression {
-            Compression::None => {
+        match conf::vals.compression {
+            conf::Compression::None => {
                 let num_padding = vec![0; 4 - vint.size];
 
                 writer.write_u8(0).unwrap(); // VERSION (UNCOMPRESSED_SINGLE_VALUE)
@@ -115,7 +114,7 @@ impl IS {
                 writer.write_all(&index_values).unwrap();
                 writer.write_all(&num_padding).unwrap();
             },
-            Compression::LZ4 => {
+            conf::Compression::LZ4 => {
                 let chunk_factor = 65536 / 2_usize.pow((vint.size - 1) as u32);
 
                 let mut index_header_c = Vec::with_capacity(index_values.len() * 4);
@@ -144,7 +143,7 @@ impl IS {
                 writer.write_u8(vint.size as u8).unwrap();
                 writer.write_u32::<BE>(data.len() as u32).unwrap();
                 writer.write_u32::<BE>(chunk_factor as u32).unwrap();
-                writer.write_u8(conf.compression as u8).unwrap();
+                writer.write_u8(conf::vals.compression as u8).unwrap();
                 writer.write_u8(1).unwrap(); // VERSION_ONE
                 writer.write_u8(0).unwrap(); // REVERSE_LOOKUP_DISALLOWED
                 writer.write_u32::<BE>((index_header_c.len() + index_values_c.len()) as u32).unwrap();

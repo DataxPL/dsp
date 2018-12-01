@@ -11,44 +11,13 @@ extern crate structopt;
 
 use byteorder::{BE, LE, WriteBytesExt};
 use serde_json::Value;
-use structopt::StructOpt;
 
 use std::collections::HashMap;
 use std::io::Write;
 
+pub mod conf;
 mod interner;
 use interner::IS;
-
-arg_enum! {
-    #[derive(Clone, Copy)]
-    enum Compression {
-        None = 0xff,
-        LZ4 = 0x1,
-    }
-}
-
-#[derive(StructOpt)]
-#[structopt(name = "ds")]
-pub struct Conf {
-    #[structopt(short, long, default_value = "none",
-        raw(
-            possible_values = "&Compression::variants()",
-            case_insensitive = "true",
-        ),
-    )]
-    compression: Compression,
-
-    #[structopt(short, long, raw(default_value = "&numcpus"))]
-    pub threads: usize,
-
-    #[structopt(name = "FILE")]
-    pub file: String,
-}
-
-lazy_static! {
-    static ref numcpus: String = num_cpus::get().to_string();
-    pub static ref conf: Conf = Conf::from_args();
-}
 
 #[derive(Debug)]
 enum ValVec {
@@ -75,9 +44,9 @@ impl VVWrite for f64 {
 
 fn compress(out: &mut Write, data: &[u8]) {
     out.write_u32::<BE>(0).unwrap(); // "nullness marker"
-    match conf.compression {
-        Compression::None => out.write(&data).unwrap(),
-        Compression::LZ4 => out.write(&lz4::block::compress(
+    match conf::vals.compression {
+        conf::Compression::None => out.write(&data).unwrap(),
+        conf::Compression::LZ4 => out.write(&lz4::block::compress(
             &data,
             Some(lz4::block::CompressionMode::HIGHCOMPRESSION(9)),
             false,
@@ -102,7 +71,7 @@ fn write_numeric<T: VVWrite>(writer: &mut Write, meta: &str, data: &[T]) {
 
     let size_per = 8192;
     writer.write_u32::<BE>(size_per as u32).unwrap();
-    writer.write_u8(conf.compression as u8).unwrap(); // compression
+    writer.write_u8(conf::vals.compression as u8).unwrap(); // compression
     writer.write_u8(1).unwrap(); // VERSION
     writer.write_u8(0).unwrap(); // REVERSE_LOOKUP_DISALLOWED
 
