@@ -14,7 +14,6 @@ lazy_static = "1.1.0"
 lz4 = "1.23.0"
 num_cpus = "1.8.0"
 serde_json = { version = "1.0.32", features = ["preserve_order"] }
-string_cache = "0.7.3"
 structopt = "0.2.13"
 
 [dev-dependencies]

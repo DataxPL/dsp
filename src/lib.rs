@@ -1,26 +1,23 @@
 extern crate byteorder;
 #[macro_use]
 extern crate clap;
-extern crate concise;
-extern crate indexmap;
 #[macro_use]
 extern crate lazy_static;
 extern crate lz4;
 extern crate num_cpus;
 #[macro_use]
 extern crate serde_json;
-extern crate string_cache;
 extern crate structopt;
 
-use byteorder::{BE,LE,ByteOrder,WriteBytesExt};
-use concise::CONCISE;
-use indexmap::IndexMap;
+use byteorder::{BE, LE, WriteBytesExt};
 use serde_json::Value;
-use string_cache::DefaultAtom as Atom;
 use structopt::StructOpt;
 
 use std::collections::HashMap;
 use std::io::Write;
+
+mod interner;
+use interner::IS;
 
 arg_enum! {
     #[derive(Clone, Copy)]
@@ -55,7 +52,7 @@ lazy_static! {
 
 #[derive(Debug)]
 enum ValVec {
-    InternedString(Vec<Atom>),
+    IndexedString(IS),
     Integer(Vec<i64>),
     Float(Vec<f64>),
 }
@@ -131,8 +128,8 @@ fn write_numeric<T: VVWrite>(writer: &mut Write, meta: &str, data: &[T]) {
 }
 
 impl ValVec {
-    fn push_is(&mut self, value: Atom) {
-        if let ValVec::InternedString(is) = self { is.push(value) }
+    fn push_s(&mut self, value: String) {
+        if let ValVec::IndexedString(is) = self { is.add_s(value) }
     }
 
     fn push_i(&mut self, value: i64) {
@@ -145,7 +142,7 @@ impl ValVec {
 
     fn append(&mut self, other: &mut ValVec) {
         match (self, other) {
-            (ValVec::InternedString(is), ValVec::InternedString(o)) => is.append(o),
+            (ValVec::IndexedString(is), ValVec::IndexedString(o)) => is.append(o),
             (ValVec::Integer(i), ValVec::Integer(o)) => i.append(o),
             (ValVec::Float(f), ValVec::Float(o)) => f.append(o),
             (_, _) => unreachable!(),
@@ -154,40 +151,9 @@ impl ValVec {
 
     fn len(&self) -> usize {
         match self {
-            ValVec::InternedString(s) => s.len(),
+            ValVec::IndexedString(is) => is.len(),
             ValVec::Integer(i) => i.len(),
             ValVec::Float(f) => f.len(),
-        }
-    }
-}
-
-struct VInt {
-    size: usize,
-}
-
-impl VInt {
-    fn new(len: usize) -> Self {
-        Self{
-            size: ((len as f64).log2() / 8. + 1.) as usize,
-        }
-    }
-
-    fn write_value(&self, out: &mut [u8], val: usize) {
-        match self.size {
-            1 => out[0] = val as u8,
-            2 => match conf.compression {
-                Compression::None => BE::write_u16(out, val as u16),
-                Compression::LZ4 => LE::write_u16(out, val as u16),
-            },
-            3 => match conf.compression {
-                Compression::None => BE::write_u24(out, val as u32),
-                Compression::LZ4 => LE::write_u24(out, val as u32),
-            },
-            4 => match conf.compression {
-                Compression::None => BE::write_u32(out, val as u32),
-                Compression::LZ4 => LE::write_u32(out, val as u32),
-            },
-            _ => (),
         }
     }
 }
@@ -200,10 +166,10 @@ impl Data {
         Data(HashMap::new())
     }
 
-    pub fn add_s(&mut self, key: String, value: Atom) {
+    pub fn add_s(&mut self, key: String, value: String) {
         self.0.entry(key)
-            .or_insert_with(|| ValVec::InternedString(Vec::new()))
-            .push_is(value);
+            .or_insert_with(|| ValVec::IndexedString(IS::new()))
+            .push_s(value);
     }
 
     pub fn add_i(&mut self, key: String, value: i64) {
@@ -248,66 +214,38 @@ impl Data {
         let mut new0 = HashMap::new();
         for (k, v) in &self.0 {
             match v {
-                ValVec::Integer(i) => new0.insert(k.to_string(), ValVec::Integer(vec![0; i.len()])),
-                ValVec::Float(i) => new0.insert(k.to_string(), ValVec::Float(vec![0.; i.len()])),
-                ValVec::InternedString(i) => new0.insert(k.to_string(), ValVec::InternedString(vec![Atom::default(); i.len()])),
+                ValVec::IndexedString(_) => {},
+                ValVec::Integer(i) => {
+                    new0.insert(k.to_string(), ValVec::Integer(vec![0; i.len()]));
+                },
+                ValVec::Float(i) => {
+                    new0.insert(k.to_string(), ValVec::Float(vec![0.; i.len()]));
+                },
             };
         }
-        for (k, v) in self.0.iter_mut() {
+        for (k, v) in self.0.drain() {
             match v {
+                ValVec::IndexedString(mut is) => {
+                    is.sort_and_permute(&perm);
+                    new0.insert(k, ValVec::IndexedString(is));
+                },
                 ValVec::Integer(i) => {
-                    if let ValVec::Integer(h) = new0.get_mut(k).unwrap() {
+                    if let ValVec::Integer(h) = new0.get_mut(&k).unwrap() {
                         for (dest_pos, curr_pos) in perm.iter().enumerate() {
                             h[dest_pos] = i[*curr_pos];
                         }
                     }
                 },
                 ValVec::Float(i) => {
-                    if let ValVec::Float(h) = new0.get_mut(k).unwrap() {
+                    if let ValVec::Float(h) = new0.get_mut(&k).unwrap() {
                         for (dest_pos, curr_pos) in perm.iter().enumerate() {
                             h[dest_pos] = i[*curr_pos];
-                        }
-                    }
-                },
-                ValVec::InternedString(i) => {
-                    if let ValVec::InternedString(h) = new0.get_mut(k).unwrap() {
-                        for (dest_pos, curr_pos) in perm.iter().enumerate() {
-                            h[dest_pos] = i[*curr_pos].clone();
                         }
                     }
                 },
             }
         }
         self.0 = new0;
-    }
-
-    fn sort_in_place(&mut self) {
-        // FIXME: Deal with this i64 vs. usize thing
-        // (usize has no negative values, but we want to have them in perm)
-        let mut perm: Vec<i64> = Vec::new();
-        if let ValVec::Integer(ts) = &self.0["timestamp"] {
-            perm = (0..ts.len() as i64).collect();
-            perm.sort_unstable_by_key(|&i| &ts[i as usize]);
-        }
-        for idx in 0..perm.len() {
-            if perm[idx] < 0 {
-                continue;
-            }
-            let mut curr_pos = idx;
-            while perm[curr_pos] as usize != idx {
-                let dest_pos = perm[curr_pos] as usize;
-                for val in self.0.values_mut() {
-                    match val {
-                        ValVec::InternedString(is) => is.swap(curr_pos, dest_pos),
-                        ValVec::Integer(i) => i.swap(curr_pos, dest_pos),
-                        ValVec::Float(f) => f.swap(curr_pos, dest_pos),
-                    }
-                }
-                perm[curr_pos] = -1 - dest_pos as i64;
-                curr_pos = dest_pos;
-            }
-            perm[curr_pos] = -1 - perm[curr_pos];
-        }
     }
 
     pub fn write(&self, writer: &mut Write) {
@@ -376,120 +314,11 @@ impl Data {
             }
 
             match datum {
-                ValVec::InternedString(is) => {
+                ValVec::IndexedString(is) => {
                     writer.write_u32::<BE>(meta_types["string"].len() as u32).unwrap();
                     writer.write_all(meta_types["string"].as_bytes()).unwrap();
 
-                    let mut map = IndexMap::new();
-                    for (i, v) in is.iter().enumerate() {
-                        map.entry(v).or_insert(Vec::new()).push(i);
-                    }
-                    map.sort_keys();
-
-                    let vint = VInt::new(map.len());
-                    let num_padding = vec![0; 4 - vint.size]; // Integer.BYTES
-
-                    let mut index_values_header = vec![];
-
-                    match conf.compression {
-                        Compression::None => {
-                            writer.write_u8(0).unwrap(); // VERSION (UNCOMPRESSED_SINGLE_VALUE)
-                            index_values_header.write_u8(0).unwrap(); // VERSION
-                            index_values_header.write_u8(vint.size as u8).unwrap(); // numBytes
-                            index_values_header.write_u32::<BE>(
-                                (is.len() * vint.size + num_padding.len()) as u32,
-                            ).unwrap();
-                        },
-                        Compression::LZ4 => {
-                            writer.write_u8(2).unwrap(); // VERSION (COMPRESSED)
-                            writer.write_u32::<BE>(0).unwrap(); // flags (stores info about bitmap/multivalue,
-                                                                // our desired one turns out to be `0`).
-                        },
-                    }
-                    writer.write_u8(1).unwrap(); // VERSION_ONE
-                    writer.write_u8(1).unwrap(); // REVERSE_LOOKUP_ALLOWED
-
-                    // XXX: Maybe it's better idea to store str lengths at data
-                    // creation time and avoid these buffers?
-                    let mut index_header = vec![];
-                    let mut index_items = vec![];
-                    let mut index_values = vec![0; is.len() * vint.size];
-
-                    let mut bitmap_header = vec![];
-                    let mut bitmap_values = vec![];
-
-                    bitmap_header.write_u32::<BE>(map.len() as u32).unwrap();
-
-                    let mut offset = 0;
-                    for (i, (k, v)) in map.iter().enumerate() {
-                        offset += k.len() as u32 + 4; // + "nullness marker"
-                        index_header.write_u32::<BE>(offset).unwrap();
-                        index_items.write_u32::<BE>(0).unwrap(); // "nullness marker"
-
-                        let mut concise = CONCISE::new();
-
-                        index_items.write_all(k.as_bytes()).unwrap();
-                        for vv in v {
-                            vint.write_value(
-                                &mut index_values[vv * vint.size..(vv + 1) * vint.size],
-                                i,
-                            );
-                            concise.append(*vv as i32);
-                        }
-
-                        bitmap_values.write_u32::<BE>(0).unwrap();
-                        for word in concise.words_view() {
-                            bitmap_values.write_i32::<BE>(word.0).unwrap();
-                        }
-                        bitmap_header.write_u32::<BE>(bitmap_values.len() as u32).unwrap();
-                    }
-
-                    writer.write_u32::<BE>(
-                        index_header.len() as u32 + index_items.len() as u32 + 4
-                    ).unwrap(); // + Integer.BYTES
-                    writer.write_u32::<BE>(map.len() as u32).unwrap(); // numWritten
-                    writer.write_all(&index_header).unwrap();
-                    writer.write_all(&index_items).unwrap();
-
-                    match conf.compression {
-                        Compression::None => {
-                            index_values.write_all(&num_padding).unwrap();
-                            writer.write_all(&index_values_header).unwrap();
-                            writer.write_all(&index_values).unwrap();
-                        },
-                        Compression::LZ4 => {
-                            let chunk_factor = 65536 / 2_usize.pow((vint.size - 1) as u32);
-
-                            index_values_header.write_u32::<BE>((is.len() as f64 / chunk_factor as f64).ceil() as u32).unwrap();
-
-                            let mut index_values_c = vec![];
-                            for chunk in index_values.chunks(65536) {
-                                compress(&mut index_values_c, chunk);
-                                index_values_header.write_u32::<BE>(index_values_c.len() as u32).unwrap();
-                            }
-
-                            writer.write_u8(2).unwrap(); // VERSION
-                            writer.write_u8(vint.size as u8).unwrap();
-                            writer.write_u32::<BE>(is.len() as u32).unwrap();
-                            writer.write_u32::<BE>(chunk_factor as u32).unwrap(); // chunkFactor
-                            writer.write_u8(conf.compression as u8).unwrap();
-                            writer.write_u8(1).unwrap(); // VERSION_ONE
-                            writer.write_u8(0).unwrap(); // REVERSE_LOOKUP_DISALLOWED
-                            writer.write_u32::<BE>((index_values_header.len() + index_values_c.len()) as u32).unwrap();
-                            writer.write_all(&index_values_header).unwrap();
-
-                            writer.write_all(&index_values_c).unwrap();
-                        },
-                    }
-
-                    writer.write_u8(1).unwrap(); // VERSION
-                    writer.write_u8(0).unwrap(); // REVERSE_LOOKUP_DISALLOWED
-                    writer.write_u32::<BE>(
-                        (bitmap_header.len() + bitmap_values.len()) as u32,
-                    ).unwrap();
-
-                    writer.write_all(&bitmap_header).unwrap();
-                    writer.write_all(&bitmap_values).unwrap();
+                    is.write(writer);
                 },
                 ValVec::Integer(i) => write_numeric(writer, &meta_types["long"], i),
                 ValVec::Float(f) => write_numeric(writer, &meta_types["double"], f),

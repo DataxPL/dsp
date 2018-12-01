@@ -1,11 +1,9 @@
 extern crate crossbeam_channel;
 extern crate itertools;
 extern crate serde_json;
-extern crate string_cache;
 
 use itertools::Itertools;
 use serde_json::{Map,Value};
-use string_cache::DefaultAtom as Atom;
 
 use std::fs::File;
 use std::io::{BufRead,BufReader,BufWriter};
@@ -50,7 +48,7 @@ fn main() {
                                 }
                             },
                             Value::String(s) => {
-                                data.add_s(key, Atom::from(s));
+                                data.add_s(key, s);
                             },
                             _ => (),
                         }
