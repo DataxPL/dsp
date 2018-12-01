@@ -55,7 +55,7 @@ fn main() {
                     }
                 }
             }
-            tx_res.send(data);
+            tx_res.send(data).unwrap();
             drop(tx_res);
         });
     }
@@ -65,7 +65,7 @@ fn main() {
 
     for chunk_iter in &BufReader::new(file).lines().chunks(1000) {
         let chunk: Vec<String> = chunk_iter.map(|c| c.unwrap()).collect();
-        tx_ch.send(chunk);
+        tx_ch.send(chunk).unwrap();
     }
     drop(tx_ch);
 
