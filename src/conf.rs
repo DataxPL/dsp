@@ -1,5 +1,7 @@
 use structopt::StructOpt;
 
+use std::path::PathBuf;
+
 arg_enum! {
     #[derive(Clone, Copy)]
     pub enum Compression {
@@ -11,6 +13,9 @@ arg_enum! {
 #[derive(StructOpt)]
 #[structopt(name = "ds")]
 pub struct Conf {
+    #[structopt(short, long, default_value = "output", parse(from_os_str))]
+    pub output: PathBuf,
+
     #[structopt(short, long, default_value = "none",
         raw(
             possible_values = "&Compression::variants()",

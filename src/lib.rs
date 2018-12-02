@@ -13,7 +13,9 @@ use byteorder::{BE, LE, WriteBytesExt};
 use serde_json::Value;
 
 use std::collections::HashMap;
-use std::io::Write;
+use std::fs;
+use std::io::{BufWriter, Write};
+use std::path::PathBuf;
 
 pub mod conf;
 mod interner;
@@ -217,7 +219,27 @@ impl Data {
         self.0 = new0;
     }
 
-    pub fn write(&self, writer: &mut Write) {
+    pub fn write(&self, path: &PathBuf) {
+        self.write_version(path.join("version.bin"));
+        self.write_factory(path.join("factory.json"));
+        self.write_data(path.join("00000.smoosh"));
+    }
+
+    fn write_version(&self, path: PathBuf) {
+        let mut fo = fs::File::create(path).unwrap();
+        fo.write_u32::<BE>(9).unwrap();
+    }
+
+    fn write_factory(&self, path: PathBuf) {
+        let fo = fs::File::create(path).unwrap();
+        let factory = json!({"type": "mMapSegmentFactory"});
+        serde_json::to_writer(fo, &factory).unwrap();
+    }
+
+    fn write_data(&self, path: PathBuf) {
+        let fo = fs::File::create(path).unwrap();
+        let mut writer = BufWriter::new(fo);
+
         let meta_long = json!({
             "valueType": "LONG",
             "hasMultipleValues": false,
@@ -287,10 +309,10 @@ impl Data {
                     writer.write_u32::<BE>(meta_types["string"].len() as u32).unwrap();
                     writer.write_all(meta_types["string"].as_bytes()).unwrap();
 
-                    is.write(writer);
+                    is.write(&mut writer);
                 },
-                ValVec::Integer(i) => write_numeric(writer, &meta_types["long"], i),
-                ValVec::Float(f) => write_numeric(writer, &meta_types["double"], f),
+                ValVec::Integer(i) => write_numeric(&mut writer, &meta_types["long"], i),
+                ValVec::Float(f) => write_numeric(&mut writer, &meta_types["double"], f),
             }
         }
 

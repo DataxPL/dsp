@@ -3,10 +3,10 @@ extern crate itertools;
 extern crate serde_json;
 
 use itertools::Itertools;
-use serde_json::{Map,Value};
+use serde_json::{Map, Value};
 
-use std::fs::File;
-use std::io::{BufRead,BufReader,BufWriter};
+use std::fs;
+use std::io::{BufRead, BufReader};
 // use std::mem::size_of;
 use std::thread;
 use std::time::Instant;
@@ -15,14 +15,11 @@ extern crate ds;
 use ds::{Data, conf};
 
 fn main() {
+    let file = fs::File::open(&conf::vals.file).unwrap();
+
     let mut instant = Instant::now();
 
-    let file = File::open(&conf::vals.file).unwrap();
-
     let mut data = Data::new();
-
-    println!("init `{:?}`", instant.elapsed());
-    instant = Instant::now();
 
     let (tx_ch, rx_ch): (
         crossbeam_channel::Sender<Vec<String>>,
@@ -83,19 +80,8 @@ fn main() {
     println!("sort `{:?}`", instant.elapsed());
     instant = Instant::now();
 
-    let fop = File::create("22222.smoosh").unwrap();
-    let mut fo = BufWriter::new(fop);
-
-    data.write(&mut fo);
+    fs::create_dir_all(&conf::vals.output).unwrap();
+    data.write(&conf::vals.output);
 
     println!("dump `{:?}`", instant.elapsed());
-
-
-    // if args.len() > 2 {
-    //     if args.len() > 3 {
-    //         thread::sleep_ms(60000);
-    //     }
-    // } else {
-    //     println!("{:?}", data);
-    // }
 }
