@@ -11,37 +11,6 @@ use std::io::Write;
 use conf;
 use compress;
 
-struct VInt {
-    size: usize,
-}
-
-impl VInt {
-    fn new(len: usize) -> Self {
-        Self{
-            size: ((len as f64).log2() / 8. + 1.) as usize,
-        }
-    }
-
-    fn write_value(&self, out: &mut Write, val: usize) {
-        match self.size {
-            1 => out.write_u8(val as u8).unwrap(),
-            2 => match conf::vals.compression {
-                conf::Compression::None => out.write_u16::<BE>(val as u16).unwrap(),
-                conf::Compression::LZ4 => out.write_u16::<LE>(val as u16).unwrap(),
-            },
-            3 => match conf::vals.compression {
-                conf::Compression::None => out.write_u24::<BE>(val as u32).unwrap(),
-                conf::Compression::LZ4 => out.write_u24::<LE>(val as u32).unwrap(),
-            },
-            4 => match conf::vals.compression {
-                conf::Compression::None => out.write_u32::<BE>(val as u32).unwrap(),
-                conf::Compression::LZ4 => out.write_u32::<LE>(val as u32).unwrap(),
-            },
-            _ => (),
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct IS(Vec<ISF>);
 
@@ -161,7 +130,12 @@ impl IS {
         writer.write_all(&bitmap_values).unwrap();
     }
 
-    pub fn sort(&mut self) {
+    pub fn sort_and_permute(&mut self, permutation: &[usize]) {
+        self.sort();
+        self.0[0].indexes = permutation.iter().map(|p| self.0[0].indexes[*p]).collect();
+    }
+
+    fn sort(&mut self) {
         // TODO: Get the .union method going
         let mut newisf = ISF::new();
         for isf in &self.0 {
@@ -180,15 +154,6 @@ impl IS {
         }
 
         self.0 = vec![newisf];
-    }
-
-    pub fn sort_and_permute(&mut self, permutation: &[usize]) {
-        self.sort();
-        let mut newindexes = vec![0; self.0[0].indexes.len()];
-        for (dest_pos, curr_pos) in permutation.iter().enumerate() {
-            newindexes[dest_pos] = self.0[0].indexes[*curr_pos];
-        }
-        self.0[0].indexes = newindexes;
     }
 }
 
@@ -211,5 +176,36 @@ impl ISF {
 
     fn len(&self) -> usize {
         self.indexes.len()
+    }
+}
+
+struct VInt {
+    size: usize,
+}
+
+impl VInt {
+    fn new(len: usize) -> Self {
+        Self{
+            size: ((len as f64).log2() / 8. + 1.) as usize,
+        }
+    }
+
+    fn write_value(&self, out: &mut Write, val: usize) {
+        match self.size {
+            1 => out.write_u8(val as u8).unwrap(),
+            2 => match conf::vals.compression {
+                conf::Compression::None => out.write_u16::<BE>(val as u16).unwrap(),
+                conf::Compression::LZ4 => out.write_u16::<LE>(val as u16).unwrap(),
+            },
+            3 => match conf::vals.compression {
+                conf::Compression::None => out.write_u24::<BE>(val as u32).unwrap(),
+                conf::Compression::LZ4 => out.write_u24::<LE>(val as u32).unwrap(),
+            },
+            4 => match conf::vals.compression {
+                conf::Compression::None => out.write_u32::<BE>(val as u32).unwrap(),
+                conf::Compression::LZ4 => out.write_u32::<LE>(val as u32).unwrap(),
+            },
+            _ => (),
+        }
     }
 }

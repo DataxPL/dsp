@@ -176,24 +176,12 @@ impl Data {
     }
 
     pub fn sort(&mut self) {
-        // TODO: Refactor
         let mut perm: Vec<usize> = Vec::new();
         if let ValVec::Integer(ts) = &self.0["timestamp"] {
             perm = (0..ts.len()).collect();
             perm.sort_unstable_by_key(|&i| &ts[i]);
         }
         let mut new0 = HashMap::new();
-        for (k, v) in &self.0 {
-            match v {
-                ValVec::IndexedString(_) => {},
-                ValVec::Integer(i) => {
-                    new0.insert(k.to_string(), ValVec::Integer(vec![0; i.len()]));
-                },
-                ValVec::Float(i) => {
-                    new0.insert(k.to_string(), ValVec::Float(vec![0.; i.len()]));
-                },
-            };
-        }
         for (k, v) in self.0.drain() {
             match v {
                 ValVec::IndexedString(mut is) => {
@@ -201,18 +189,10 @@ impl Data {
                     new0.insert(k, ValVec::IndexedString(is));
                 },
                 ValVec::Integer(i) => {
-                    if let ValVec::Integer(h) = new0.get_mut(&k).unwrap() {
-                        for (dest_pos, curr_pos) in perm.iter().enumerate() {
-                            h[dest_pos] = i[*curr_pos];
-                        }
-                    }
+                    new0.insert(k, ValVec::Integer(perm.iter().map(|p| i[*p]).collect()));
                 },
-                ValVec::Float(i) => {
-                    if let ValVec::Float(h) = new0.get_mut(&k).unwrap() {
-                        for (dest_pos, curr_pos) in perm.iter().enumerate() {
-                            h[dest_pos] = i[*curr_pos];
-                        }
-                    }
+                ValVec::Float(f) => {
+                    new0.insert(k, ValVec::Float(perm.iter().map(|p| f[*p]).collect()));
                 },
             }
         }
