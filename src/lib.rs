@@ -21,6 +21,42 @@ pub mod conf;
 mod interner;
 use interner::IS;
 
+lazy_static! {
+    static ref META_TYPES: HashMap<&'static str, String> = {
+        let meta_long = json!({
+            "valueType": "LONG",
+            "hasMultipleValues": false,
+            "parts": [{
+                "type": "long",
+                "byteOrder": "LITTLE_ENDIAN",
+            }],
+        });
+        let meta_double = json!({
+            "valueType": "DOUBLE",
+            "hasMultipleValues": false,
+            "parts": [{
+                "type": "double",
+                "byteOrder": "LITTLE_ENDIAN",
+            }],
+        });
+        let meta_string = json!({
+            "valueType": "STRING",
+            "hasMultipleValues": false,
+            "parts": [{
+                "type": "stringDictionary",
+                "bitmapSerdeFactory": {"type": "concise"},
+                "byteOrder": "LITTLE_ENDIAN",
+            }],
+        });
+
+        let mut meta_types = HashMap::new();
+        meta_types.insert("long", meta_long.to_string());
+        meta_types.insert("double", meta_double.to_string());
+        meta_types.insert("string", meta_string.to_string());
+        meta_types
+    };
+}
+
 #[derive(Debug)]
 enum ValVec {
     IndexedString(IS),
@@ -220,98 +256,38 @@ impl Data {
         let fo = fs::File::create(path).unwrap();
         let mut writer = BufWriter::new(fo);
 
-        let meta_long = json!({
-            "valueType": "LONG",
-            "hasMultipleValues": false,
-            "parts": [{
-                "type": "long",
-                "byteOrder": "LITTLE_ENDIAN",
-            }],
-        });
-        let meta_double = json!({
-            "valueType": "DOUBLE",
-            "hasMultipleValues": false,
-            "parts": [{
-                "type": "double",
-                "byteOrder": "LITTLE_ENDIAN",
-            }],
-        });
-        let meta_string = json!({
-            "valueType": "STRING",
-            "hasMultipleValues": false,
-            "parts": [{
-                "type": "stringDictionary",
-                "bitmapSerdeFactory": {"type": "concise"},
-                "byteOrder": "LITTLE_ENDIAN",
-            }],
-        });
-
-        let mut meta_types = HashMap::new();
-        meta_types.insert("long", meta_long.to_string());
-        meta_types.insert("double", meta_double.to_string());
-        meta_types.insert("string", meta_string.to_string());
-
+        let metrics = vec!["count"];
         let keys = vec![
-            "timestamp",
-            "count",
             "vendor", "technology", "version", "ne_type", "object_id", "counter_id",
             "granularity", "end_timestamp", "creation_timeprint",
             "value_num",
         ];
 
-        // XXX: We should be able to merge cols and dims with sth clever
-        let mut cols_index_header = vec![];
-        let mut cols_index_header_size = 0;
-        let mut cols_index = vec![];
-        let mut dims_index_header = vec![];
-        let mut dims_index_header_size = 0;
-        let mut dims_index = vec![];
+        self.write_key(&mut writer, "timestamp");
 
+        let mut cols_index = Vec::with_capacity((keys.len() + metrics.len()) * 4);
+        let mut cols_index_header = Vec::with_capacity((keys.len() + metrics.len()) * 4);
+        let mut dims_index_header = Vec::with_capacity(keys.len() * 4);
+
+        for key in metrics {
+            cols_index.write_u32::<BE>(0).unwrap();
+            cols_index.write_all(key.as_bytes()).unwrap();
+            cols_index_header.write_u32::<BE>(cols_index.len() as u32).unwrap();
+
+            self.write_key(&mut writer, key);
+        }
+        let offset = cols_index.len();
         for key in keys {
-            let datum = &self.0[key];
+            cols_index.write_u32::<BE>(0).unwrap();
+            cols_index.write_all(key.as_bytes()).unwrap();
+            cols_index_header.write_u32::<BE>(cols_index.len() as u32).unwrap();
+            dims_index_header.write_u32::<BE>(cols_index[offset..].len() as u32).unwrap();
 
-            if key != "timestamp" {
-                cols_index_header_size += 4 + key.len() as u32;
-                cols_index_header.write_u32::<BE>(cols_index_header_size).unwrap();
-                cols_index.write_u32::<BE>(0).unwrap();
-                cols_index.write_all(key.as_bytes()).unwrap();
-
-                if key != "count" {
-                    dims_index_header_size += 4 + key.len() as u32;
-                    dims_index_header.write_u32::<BE>(dims_index_header_size).unwrap();
-                    dims_index.write_u32::<BE>(0).unwrap();
-                    dims_index.write_all(key.as_bytes()).unwrap();
-                }
-            }
-
-            match datum {
-                ValVec::IndexedString(is) => {
-                    writer.write_u32::<BE>(meta_types["string"].len() as u32).unwrap();
-                    writer.write_all(meta_types["string"].as_bytes()).unwrap();
-
-                    is.write(&mut writer);
-                },
-                ValVec::Integer(i) => write_numeric(&mut writer, &meta_types["long"], i),
-                ValVec::Float(f) => write_numeric(&mut writer, &meta_types["double"], f),
-            }
+            self.write_key(&mut writer, key);
         }
 
-        writer.write_u8(1).unwrap(); // GenericIndexed.VERSION_ONE
-        writer.write_u8(0).unwrap(); // GenericIndexed.REVERSE_LOOKUP_DISALLOWED
-        writer.write_u32::<BE>(
-            (cols_index_header.len() + cols_index.len() + 4) as u32
-        ).unwrap(); // + Integer.BYTES
-        writer.write_u32::<BE>(self.0.len() as u32 - 1).unwrap(); // GenericIndexed.size (number of columns, without timestamp)
-        writer.write_all(&cols_index_header).unwrap();
-        writer.write_all(&cols_index).unwrap();
-        writer.write_u8(1).unwrap(); // GenericIndexed.VERSION_ONE
-        writer.write_u8(0).unwrap(); // GenericIndexed.REVERSE_LOOKUP_DISALLOWED
-        writer.write_u32::<BE>(
-            (dims_index_header.len() + dims_index.len() + 4) as u32
-        ).unwrap(); // + Integer.BYTES
-        writer.write_u32::<BE>(self.0.len() as u32 - 2).unwrap(); // GenericIndexed.size (number of dims, without timestamp and count)
-        writer.write_all(&dims_index_header).unwrap();
-        writer.write_all(&dims_index).unwrap();
+        self.write_columns_index(&mut writer, &cols_index, &cols_index_header, 1);
+        self.write_columns_index(&mut writer, &cols_index[offset..], &dims_index_header, 2);
 
         if let ValVec::Integer(ts) = &self.0["timestamp"] {
             writer.write_i64::<BE>(ts[0]).unwrap();
@@ -343,5 +319,27 @@ impl Data {
         writer.write_u32::<BE>(18).unwrap();
         writer.write_all(bitmap_type.to_string().as_bytes()).unwrap();
         writer.write_all(generic_meta.to_string().as_bytes()).unwrap();
+    }
+
+    fn write_key(&self, writer: &mut Write, key: &str) {
+        match &self.0[key] {
+            ValVec::IndexedString(is) => {
+                writer.write_u32::<BE>(META_TYPES["string"].len() as u32).unwrap();
+                writer.write_all(META_TYPES["string"].as_bytes()).unwrap();
+
+                is.write(writer);
+            },
+            ValVec::Integer(i) => write_numeric(writer, &META_TYPES["long"], i),
+            ValVec::Float(f) => write_numeric(writer, &META_TYPES["double"], f),
+        }
+    }
+
+    fn write_columns_index(&self, writer: &mut Write, index: &[u8], header: &[u8], delta: u32) {
+        writer.write_u8(1).unwrap(); // GenericIndexed.VERSION_ONE
+        writer.write_u8(0).unwrap(); // GenericIndexed.REVERSE_LOOKUP_DISALLOWED
+        writer.write_u32::<BE>((header.len() + index.len() + 4) as u32).unwrap(); // + Integer.BYTES
+        writer.write_u32::<BE>(self.0.len() as u32 - delta).unwrap(); // GenericIndexed.size (number of columns/dimensions, without timestamp)
+        writer.write_all(&header).unwrap();
+        writer.write_all(&index).unwrap();
     }
 }
