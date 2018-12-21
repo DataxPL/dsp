@@ -7,14 +7,14 @@ authors = ["KenjiTakahashi <wozniakk@gmail.com>"]
 byteorder = "1.2.7"
 clap = "2.21"  # This has to be in sync with version in "structopt" dep
 concise = { path = "../concise", version = "0.2.1" }
-crossbeam-channel = "0.3.2"
+crossbeam-channel = "0.3.6"
 indexmap = "1.0.2"
-itertools = "0.7.11"
+itertools = "0.8.0"
 lazy_static = "1.2.0"
 lz4 = "1.23.1"
-num_cpus = "1.8.0"
-serde_json = { version = "1.0.33", features = ["preserve_order"] }
-structopt = "0.2.13"
+num_cpus = "1.9.0"
+serde_json = { version = "1.0.35", features = ["preserve_order"] }
+structopt = "0.2.14"
 
 [dev-dependencies]
 rand = "0.5.5"
