@@ -14,8 +14,9 @@ use std::time::Instant;
 extern crate ds;
 use ds::{Data, conf};
 
-fn main() {
-    let file = fs::File::open(&conf::vals.file).unwrap();
+fn perform(filename: &str) {
+    println!("{:?}", filename);
+    let file = fs::File::open(filename).unwrap();
 
     let mut instant = Instant::now();
 
@@ -84,4 +85,25 @@ fn main() {
     data.write(&conf::vals.output);
 
     println!("dump `{:?}`", instant.elapsed());
+}
+
+fn main() {
+    let filemeta = fs::metadata(&conf::vals.file).unwrap();
+    if filemeta.is_file() {
+        perform(&conf::vals.file);
+    } else if filemeta.is_dir() {
+        for entry in fs::read_dir(&conf::vals.file).unwrap() {
+            let entry = entry.unwrap();
+
+            if let Ok(filemeta) = entry.metadata() {
+                if filemeta.is_file() {
+                    if let Some(ext) = entry.path().extension() {
+                        if ext == "json" {
+                            perform(entry.path().to_str().unwrap());
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
