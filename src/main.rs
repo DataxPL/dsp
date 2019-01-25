@@ -1,5 +1,8 @@
+extern crate chrono;
 extern crate crossbeam_channel;
+extern crate fern;
 extern crate itertools;
+#[macro_use] extern crate log;
 extern crate serde_json;
 
 use itertools::Itertools;
@@ -15,7 +18,8 @@ extern crate ds;
 use ds::{Data, conf};
 
 fn perform(filename: &str) {
-    println!("{:?}", filename);
+    info!("started `{}`", filename);
+
     let file = fs::File::open(filename).unwrap();
 
     let mut instant = Instant::now();
@@ -73,21 +77,35 @@ fn perform(filename: &str) {
 
     data.preaggregate();
 
-    println!("json `{:?}`", instant.elapsed());
+    debug!("json `{:?}`", instant.elapsed());
     instant = Instant::now();
 
     data.sort();
 
-    println!("sort `{:?}`", instant.elapsed());
+    debug!("sort `{:?}`", instant.elapsed());
     instant = Instant::now();
 
     fs::create_dir_all(&conf::vals.output).unwrap();
     data.write(&conf::vals.output);
 
-    println!("dump `{:?}`", instant.elapsed());
+    debug!("dump `{:?}`", instant.elapsed());
+
+    info!("finished `{}`", filename);
 }
 
 fn main() {
+    let mut logd = fern::Dispatch::new()
+        .format(|out, msg, _record| {
+            out.finish(format_args!("{} - {}", chrono::Utc::now(), msg))
+        })
+        .level(log::LevelFilter::Debug)
+        .chain(std::io::stderr());
+    if let Ok(mut cexe) = std::env::current_exe() {
+        cexe.set_extension("log");
+        logd = logd.chain(fern::log_file(cexe).unwrap());
+    }
+    logd.apply().unwrap();
+
     let filemeta = fs::metadata(&conf::vals.file).unwrap();
     if filemeta.is_file() {
         perform(&conf::vals.file);
