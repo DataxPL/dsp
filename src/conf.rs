@@ -13,6 +13,12 @@ arg_enum! {
 #[derive(StructOpt)]
 #[structopt(name = "ds")]
 pub struct Conf {
+    #[structopt(short, long)]
+    pub dimensions: Vec<String>,
+
+    #[structopt(short, long)]
+    pub metrics: Vec<String>,
+
     #[structopt(short, long, default_value = "output", parse(from_os_str))]
     pub output: PathBuf,
 

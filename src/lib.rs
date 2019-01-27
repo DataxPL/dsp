@@ -1,8 +1,8 @@
 extern crate byteorder;
 #[macro_use]
 extern crate clap;
-#[macro_use]
-extern crate lazy_static;
+#[macro_use] extern crate lazy_static;
+extern crate indexmap;
 extern crate lz4;
 extern crate num_cpus;
 #[macro_use]
@@ -10,6 +10,7 @@ extern crate serde_json;
 extern crate structopt;
 
 use byteorder::{BE, LE, WriteBytesExt};
+use indexmap::IndexSet;
 use serde_json::Value;
 
 use std::collections::HashMap;
@@ -256,18 +257,20 @@ impl Data {
         let fo = fs::File::create(path).unwrap();
         let mut writer = BufWriter::new(fo);
 
-        let metrics = vec!["count"];
-        let keys = vec![
-            "vendor", "technology", "version", "ne_type", "object_id", "counter_id",
-            "granularity", "end_timestamp", "creation_timeprint",
-            "value_num",
-        ];
+        let metrics = conf::vals.metrics.iter().collect::<IndexSet<_>>();
+        let mut dimensions = conf::vals.dimensions.iter().collect::<IndexSet<_>>();
+        if dimensions.is_empty() {
+            for dimension in self.0.keys() {
+                dimensions.insert(dimension);
+            }
+        }
+        dimensions = &dimensions - &metrics;
 
         self.write_key(&mut writer, "timestamp");
 
-        let mut cols_index = Vec::with_capacity((keys.len() + metrics.len()) * 4);
-        let mut cols_index_header = Vec::with_capacity((keys.len() + metrics.len()) * 4);
-        let mut dims_index_header = Vec::with_capacity(keys.len() * 4);
+        let mut cols_index = Vec::with_capacity((dimensions.len() + metrics.len()) * 4);
+        let mut cols_index_header = Vec::with_capacity((dimensions.len() + metrics.len()) * 4);
+        let mut dims_index_header = Vec::with_capacity(dimensions.len() * 4);
 
         for key in metrics {
             cols_index.write_u32::<BE>(0).unwrap();
@@ -277,7 +280,7 @@ impl Data {
             self.write_key(&mut writer, key);
         }
         let offset = cols_index.len();
-        for key in keys {
+        for key in dimensions {
             cols_index.write_u32::<BE>(0).unwrap();
             cols_index.write_all(key.as_bytes()).unwrap();
             cols_index_header.write_u32::<BE>(cols_index.len() as u32).unwrap();
