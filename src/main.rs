@@ -11,6 +11,7 @@ use serde_json::{Map, Value};
 use std::fs;
 use std::io::{BufRead, BufReader};
 // use std::mem::size_of;
+use std::path::PathBuf;
 use std::thread;
 use std::time::Instant;
 
@@ -85,8 +86,10 @@ fn perform(filename: &str) {
     debug!("sort `{:?}`", instant.elapsed());
     instant = Instant::now();
 
-    fs::create_dir_all(&conf::vals.output).unwrap();
-    data.write(&conf::vals.output);
+    let mut output = conf::vals.output.clone();
+    output.push(PathBuf::from(filename).file_stem().unwrap());
+    fs::create_dir_all(&output).unwrap();
+    data.write(&output);
 
     debug!("dump `{:?}`", instant.elapsed());
 
