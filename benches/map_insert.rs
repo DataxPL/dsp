@@ -1,7 +1,7 @@
 #![feature(test)]
 
 extern crate test;
-extern crate ds;
+extern crate dsp;
 #[macro_use]
 extern crate lazy_static;
 extern crate rand;
@@ -10,7 +10,7 @@ extern crate rand;
 mod tests {
     use std::collections::HashMap;
     use test::Bencher;
-    use ds::ValVec;
+    use dsp::ValVec;
 
     use rand::{thread_rng, Rng};
 

@@ -11,7 +11,7 @@ arg_enum! {
 }
 
 #[derive(StructOpt)]
-#[structopt(name = "ds")]
+#[structopt(name = "dsp")]
 pub struct Conf {
     #[structopt(short, long)]
     pub dimensions: Vec<String>,

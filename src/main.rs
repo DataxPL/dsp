@@ -15,8 +15,8 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Instant;
 
-extern crate ds;
-use ds::{Data, conf};
+extern crate dsp;
+use dsp::{Data, conf};
 
 fn perform(filename: &str) {
     info!("started `{}`", filename);
