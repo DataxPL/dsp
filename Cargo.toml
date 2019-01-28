@@ -4,10 +4,10 @@ version = "0.2.0"
 authors = ["KenjiTakahashi <wozniakk@gmail.com>"]
 
 [dependencies]
-byteorder = "1.2.7"
+byteorder = "1.3.1"
 chrono = "0.4.6"
 clap = "2.21"  # This has to be in sync with version in "structopt" dep
-concise = { path = "../concise", version = "0.2.1" }
+concise = "0.2.1"
 crossbeam-channel = "0.3.6"
 fern = "0.5.7"
 indexmap = "1.0.2"
@@ -16,7 +16,7 @@ lazy_static = "1.2.0"
 log = "0.4.6"
 lz4 = "1.23.1"
 num_cpus = "1.9.0"
-serde_json = { version = "1.0.35", features = ["preserve_order"] }
+serde_json = { version = "1.0.37", features = ["preserve_order"] }
 structopt = "0.2.14"
 
 [dev-dependencies]
