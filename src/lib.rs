@@ -93,11 +93,6 @@ fn compress(out: &mut Write, data: &[u8]) {
     };
 }
 
-fn write_numeric_batch(all: &mut Vec<u8>, batch: &mut Vec<u8>) {
-    compress(all, &batch);
-    batch.clear();
-}
-
 fn write_numeric<T: VVWrite>(writer: &mut Write, meta: &str, data: &[T]) {
     writer.write_u32::<BE>(meta.len() as u32).unwrap();
     writer.write_all(meta.as_bytes()).unwrap();
@@ -114,20 +109,18 @@ fn write_numeric<T: VVWrite>(writer: &mut Write, meta: &str, data: &[T]) {
     writer.write_u8(1).unwrap(); // VERSION
     writer.write_u8(0).unwrap(); // REVERSE_LOOKUP_DISALLOWED
 
-    let mut header = vec![];
-    let mut values_all = vec![];
-    let mut values_batch = vec![];
+    let mut header = Vec::with_capacity(data.len() / size_per * 4);
+    let mut values_all = Vec::with_capacity(data.len() * 8);
+    let mut values_batch = Vec::with_capacity(size_per);
 
-    for (n, v) in data.iter().enumerate() {
-        if n > 0 && n % size_per == 0 {
-            write_numeric_batch(&mut values_all, &mut values_batch);
-            header.write_u32::<BE>(values_all.len() as u32).unwrap();
+    for chunk in data.chunks(size_per) {
+        for v in chunk {
+            v.write(&mut values_batch);
         }
-        v.write(&mut values_batch);
+        compress(&mut values_all, &values_batch);
+        values_batch.clear();
+        header.write_u32::<BE>(values_all.len() as u32).unwrap();
     }
-
-    write_numeric_batch(&mut values_all, &mut values_batch);
-    header.write_u32::<BE>(values_all.len() as u32).unwrap();
 
     writer.write_u32::<BE>((header.len() + values_all.len() + 4) as u32).unwrap(); // + Integer.NUM_BYTES
     writer.write_u32::<BE>((length as f64 / size_per as f64).ceil() as u32).unwrap(); // numWritten
