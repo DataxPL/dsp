@@ -232,7 +232,7 @@ impl Data {
     pub fn write(&self, path: &PathBuf) {
         self.write_version(path.join("version.bin"));
         self.write_factory(path.join("factory.json"));
-        self.write_data(path.join("00000.smoosh"));
+        self.write_data(path.join("00000.smoosh"), path.join("meta.smoosh"));
     }
 
     fn write_version(&self, path: PathBuf) {
@@ -246,9 +246,11 @@ impl Data {
         serde_json::to_writer(fo, &factory).unwrap();
     }
 
-    fn write_data(&self, path: PathBuf) {
+    fn write_data(&self, path: PathBuf, meta_path: PathBuf) {
         let fo = fs::File::create(path).unwrap();
         let mut writer = BufWriter::new(fo);
+        let m_fo = fs::File::create(meta_path).unwrap();
+        let mut m_writer = BufWriter::new(m_fo);
 
         let metrics = conf::vals.metrics.iter().collect::<IndexSet<_>>();
         let mut dimensions = conf::vals.dimensions.iter().collect::<IndexSet<_>>();
@@ -259,7 +261,8 @@ impl Data {
         }
         dimensions = &dimensions - &metrics;
 
-        self.write_key(&mut writer, "timestamp");
+        let mut offset = self.write_key(&mut writer, "timestamp");
+        write!(&mut m_writer, "v1,{},1\n__time,0,0,{}\n", std::i32::MAX, offset).unwrap();
 
         let mut cols_index = Vec::with_capacity((dimensions.len() + metrics.len()) * 4);
         let mut cols_index_header = Vec::with_capacity((dimensions.len() + metrics.len()) * 4);
@@ -270,20 +273,25 @@ impl Data {
             cols_index.write_all(key.as_bytes()).unwrap();
             cols_index_header.write_u32::<BE>(cols_index.len() as u32).unwrap();
 
-            self.write_key(&mut writer, key);
+            let next_offset = offset + self.write_key(&mut writer, key);
+            write!(&mut m_writer, "{},0,{},{}\n", key, offset, next_offset).unwrap();
+            offset = next_offset;
         }
-        let offset = cols_index.len();
+        let mut metas = IndexSet::new();
+        let cols_index_offset = cols_index.len();
         for key in dimensions {
             cols_index.write_u32::<BE>(0).unwrap();
             cols_index.write_all(key.as_bytes()).unwrap();
             cols_index_header.write_u32::<BE>(cols_index.len() as u32).unwrap();
-            dims_index_header.write_u32::<BE>(cols_index[offset..].len() as u32).unwrap();
+            dims_index_header.write_u32::<BE>(cols_index[cols_index_offset..].len() as u32).unwrap();
 
-            self.write_key(&mut writer, key);
+            let next_offset = offset + self.write_key(&mut writer, key);
+            metas.insert(format!("{},0,{},{}\n", key, offset, next_offset));
+            offset = next_offset;
         }
 
         self.write_columns_index(&mut writer, &cols_index, &cols_index_header, 1);
-        self.write_columns_index(&mut writer, &cols_index[offset..], &dims_index_header, 2);
+        self.write_columns_index(&mut writer, &cols_index[cols_index_offset..], &dims_index_header, 2);
 
         if let ValVec::Integer(ts) = &self.0["timestamp"] {
             writer.write_i64::<BE>(ts[0]).unwrap();
@@ -292,7 +300,7 @@ impl Data {
 
         let bitmap_type = json!({
             "type": "concise",
-        });
+        }).to_string();
         let generic_meta = json!({
             "container": {},
             "aggregators": [{
@@ -310,24 +318,45 @@ impl Data {
                 "type": "none",
             },
             "rollup": true,
-        });
+        }).to_string();
+
+        let new_offset =
+            offset +
+            cols_index.len() +
+            cols_index_header.len() +
+            dims_index_header.len() +
+            (cols_index.len() - cols_index_offset) +
+            20 + // index metadata (from `write_columns_index`, 1+1+4+4)
+            16 + // segment boundaries (from `if "timestamp"` above, 8+8)
+            4 + // `bitmap_type` length field (`18` below)
+            bitmap_type.len()
+        ;
+        metas.insert(format!("index.drd,0,{},{}\n", offset, new_offset));
+        metas.insert(format!("metadata.drd,0,{},{}\n", new_offset, new_offset + generic_meta.len()));
+        metas.sort();
+        for meta in metas {
+            m_writer.write_all(meta.as_bytes()).unwrap();
+        }
 
         writer.write_u32::<BE>(18).unwrap();
-        writer.write_all(bitmap_type.to_string().as_bytes()).unwrap();
-        writer.write_all(generic_meta.to_string().as_bytes()).unwrap();
+        writer.write_all(bitmap_type.as_bytes()).unwrap();
+        writer.write_all(generic_meta.as_bytes()).unwrap();
     }
 
-    fn write_key(&self, writer: &mut Write, key: &str) {
+    fn write_key(&self, writer: &mut Write, key: &str) -> usize {
+        let mut column = vec![];
         match &self.0[key] {
             ValVec::IndexedString(is) => {
-                writer.write_u32::<BE>(META_TYPES["string"].len() as u32).unwrap();
-                writer.write_all(META_TYPES["string"].as_bytes()).unwrap();
+                column.write_u32::<BE>(META_TYPES["string"].len() as u32).unwrap();
+                column.write_all(META_TYPES["string"].as_bytes()).unwrap();
 
-                is.write(writer);
+                is.write(&mut column);
             },
-            ValVec::Integer(i) => write_numeric(writer, &META_TYPES["long"], i),
-            ValVec::Float(f) => write_numeric(writer, &META_TYPES["double"], f),
+            ValVec::Integer(i) => write_numeric(&mut column, &META_TYPES["long"], i),
+            ValVec::Float(f) => write_numeric(&mut column, &META_TYPES["double"], f),
         }
+        writer.write_all(&column).unwrap();
+        column.len()
     }
 
     fn write_columns_index(&self, writer: &mut Write, index: &[u8], header: &[u8], delta: u32) {
