@@ -3,6 +3,7 @@ extern crate byteorder;
 extern crate clap;
 #[macro_use] extern crate lazy_static;
 extern crate indexmap;
+#[macro_use] extern crate log;
 extern crate lz4;
 extern crate num_cpus;
 #[macro_use]
@@ -17,10 +18,13 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
+use std::time::Instant;
 
 pub mod conf;
 mod interner;
+mod zip;
 use interner::IS;
+use zip::Zip;
 
 lazy_static! {
     static ref META_TYPES: HashMap<&'static str, String> = {
@@ -230,27 +234,49 @@ impl Data {
     }
 
     pub fn write(&self, path: &PathBuf) {
-        self.write_version(path.join("version.bin"));
-        self.write_factory(path.join("factory.json"));
-        self.write_data(path.join("00000.smoosh"), path.join("meta.smoosh"));
+        if let Some(compression) = conf::vals.zip {
+            let mut version = vec![];
+            let mut factory = vec![];
+            let mut data = vec![];
+            let mut meta = vec![];
+            self.write_version(&mut version);
+            self.write_factory(&mut factory);
+            self.write_data(&mut data, &mut meta);
+
+            let instant = Instant::now();
+
+            let zip = Zip::new(path.join("index.zip"), compression).unwrap();
+            zip.file_add("version.bin", &version).unwrap();
+            zip.file_add("factory.json", &factory).unwrap();
+            zip.file_add("00000.smoosh", &data).unwrap();
+            zip.file_add("meta.smoosh", &meta).unwrap();
+            zip.close().unwrap();
+
+            debug!("zipf `{:?}`", instant.elapsed());
+
+            return;
+        }
+        let mut file = fs::File::create(path.join("version.bin")).unwrap();
+        self.write_version(&mut file);
+        file = fs::File::create(path.join("factory.json")).unwrap();
+        self.write_factory(&mut file);
+        file = fs::File::create(path.join("00000.smoosh")).unwrap();
+        let mut meta_file = fs::File::create(path.join("meta.smoosh")).unwrap();
+        self.write_data(&mut file, &mut meta_file);
     }
 
-    fn write_version(&self, path: PathBuf) {
-        let mut fo = fs::File::create(path).unwrap();
-        fo.write_u32::<BE>(9).unwrap();
+    fn write_version(&self, writer: &mut Write) {
+        writer.write_u32::<BE>(9).unwrap();
     }
 
-    fn write_factory(&self, path: PathBuf) {
-        let fo = fs::File::create(path).unwrap();
+    fn write_factory(&self, writer: &mut Write) {
         let factory = json!({"type": "mMapSegmentFactory"});
-        serde_json::to_writer(fo, &factory).unwrap();
+        serde_json::to_writer(writer, &factory).unwrap();
     }
 
-    fn write_data(&self, path: PathBuf, meta_path: PathBuf) {
-        let fo = fs::File::create(path).unwrap();
-        let mut writer = BufWriter::new(fo);
-        let m_fo = fs::File::create(meta_path).unwrap();
-        let mut m_writer = BufWriter::new(m_fo);
+    fn write_data(&self, data_writer: &mut Write, meta_writer: &mut Write) {
+        let mut writer = BufWriter::new(data_writer);
+        let mut m_writer = BufWriter::new(meta_writer);
 
         let metrics = conf::vals.metrics.iter().collect::<IndexSet<_>>();
         let mut dimensions = conf::vals.dimensions.iter().collect::<IndexSet<_>>();

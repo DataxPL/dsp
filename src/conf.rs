@@ -30,6 +30,11 @@ pub struct Conf {
     )]
     pub compression: Compression,
 
+    #[structopt(short, long,
+        raw(possible_values = r#"&["1", "2", "3", "4", "5", "6", "7", "8", "9"]"#),
+    )]
+    pub zip: Option<u8>,
+
     #[structopt(short, long, raw(default_value = "&numcpus"))]
     pub threads: usize,
 
